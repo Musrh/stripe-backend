@@ -51,7 +51,7 @@ app.post("/create-checkout-session", async (req, res) => {
       mode: "payment",
 
       // 🔥 URLs PUBLIQUES StackBlitz (IMPORTANT)
-      success_url: "https://vitejs-vite-lr7cus3k.stackblitz.io/success",
+      success_url: "https://stripe-frontend.vercel.app/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://vitejs-vite-lr7cus3k.stackblitz.io/panier"
     })
 
