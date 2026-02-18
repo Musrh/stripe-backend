@@ -40,8 +40,8 @@ app.post("/create-checkout-session", async (req, res) => {
       mode: "payment",
 
       // 🔹 URLs publiques StackBlitz avec ton projet
-      success_url: "https://stackblitz.com/edit/vitejs-vite-lr7cus3k?file=src/pages/Success.vue",
-      cancel_url: "https://stackblitz.com/edit/vitejs-vite-lr7cus3k?file=src/pages/Panier.vue"
+      success_url: "https://stackblitz.com/edit/vitejs-vite-lr7cus3k?file=src/views/Success.vue",
+      cancel_url: "https://stackblitz.com/edit/vitejs-vite-lr7cus3k?file=src/views/Panier.vue"
     })
 
     res.json({ url: session.url })
