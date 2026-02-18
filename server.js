@@ -1,23 +1,22 @@
-
+// server.js
 const express = require("express")
 const cors = require("cors")
 const Stripe = require("stripe")
 
 const app = express()
-
-// Autoriser toutes les requêtes depuis ton frontend (StackBlitz)
 app.use(cors())
 app.use(express.json())
 
-// 🔒 Clé secrète Stripe (à mettre dans Render / Railway / autre)
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.error("❌ STRIPE_SECRET_KEY manquante !")
+}
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
 
-// Route test pour vérifier que le backend fonctionne
 app.get("/", (req, res) => {
-  res.send("Backend Stripe fonctionne ✅")
+  res.json({ message: "Backend Railway actif ✅" })
 })
 
-// Route pour créer la session de paiement
 app.post("/create-checkout-session", async (req, res) => {
   try {
     const { cart } = req.body
@@ -26,23 +25,25 @@ app.post("/create-checkout-session", async (req, res) => {
       return res.status(400).json({ error: "Panier vide" })
     }
 
-    // Création de la session Stripe
+    console.log("Panier reçu :", cart)
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       line_items: cart.map(item => ({
         price_data: {
           currency: "eur",
           product_data: { name: item.nom },
-          unit_amount: item.prix * 100 // prix en centimes
+          unit_amount: Math.round(Number(item.prix) * 100)
         },
         quantity: item.quantity
       })),
       mode: "payment",
-      success_url: "https://TON_FRONTEND/success",
-      cancel_url: "https://TON_FRONTEND/panier"
+
+      // 🔹 URLs publiques StackBlitz avec ton projet
+      success_url: "https://stackblitz.com/edit/vitejs-vite-lr7cus3k?file=src/pages/Success.vue",
+      cancel_url: "https://stackblitz.com/edit/vitejs-vite-lr7cus3k?file=src/pages/Panier.vue"
     })
 
-    // Retourner l'URL Stripe au frontend
     res.json({ url: session.url })
 
   } catch (error) {
@@ -51,8 +52,7 @@ app.post("/create-checkout-session", async (req, res) => {
   }
 })
 
-// Démarrage du serveur
 const PORT = process.env.PORT || 3000
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`)
 })
