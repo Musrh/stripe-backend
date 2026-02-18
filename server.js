@@ -1,58 +1,74 @@
 // server.js
+
 const express = require("express")
 const cors = require("cors")
 const Stripe = require("stripe")
 
 const app = express()
+
+// 🔹 Middleware
 app.use(cors())
 app.use(express.json())
 
+// 🔒 Vérification clé Stripe
 if (!process.env.STRIPE_SECRET_KEY) {
-  console.error("❌ STRIPE_SECRET_KEY manquante !")
+  console.error("❌ STRIPE_SECRET_KEY manquante dans Railway !")
+  process.exit(1)
 }
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
 
+// 🔹 Route test
 app.get("/", (req, res) => {
   res.json({ message: "Backend Railway actif ✅" })
 })
 
+// 🔹 Création session Stripe
 app.post("/create-checkout-session", async (req, res) => {
   try {
     const { cart } = req.body
+
+    console.log("🛒 Panier reçu :", cart)
 
     if (!cart || cart.length === 0) {
       return res.status(400).json({ error: "Panier vide" })
     }
 
-    console.log("Panier reçu :", cart)
-
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
+
       line_items: cart.map(item => ({
         price_data: {
           currency: "eur",
-          product_data: { name: item.nom },
+          product_data: {
+            name: item.nom
+          },
           unit_amount: Math.round(Number(item.prix) * 100)
         },
-        quantity: item.quantity
+        quantity: item.quantity || 1
       })),
+
       mode: "payment",
 
-      // 🔹 URLs publiques StackBlitz avec ton projet
-      success_url: "https://vitejs-vitelr7cus3k.stackblitz.io/success",
+      // 🔥 URLs PUBLIQUES StackBlitz (IMPORTANT)
+      success_url: "https://vitejs-vite-lr7cus3k.stackblitz.io/success",
       cancel_url: "https://vitejs-vite-lr7cus3k.stackblitz.io/panier"
     })
+
+    // 🔍 Log important
+    console.log("✅ Session URL :", session.url)
 
     res.json({ url: session.url })
 
   } catch (error) {
-    console.error("Erreur paiement :", error)
+    console.error("❌ Erreur paiement :", error.message)
     res.status(500).json({ error: error.message })
   }
 })
 
+// 🔹 Lancement serveur
 const PORT = process.env.PORT || 3000
+
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on port ${PORT}`)
+  console.log(`🚀 Server running on port ${PORT}`)
 })
