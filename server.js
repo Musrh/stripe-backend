@@ -1,3 +1,4 @@
+// server.js
 const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
@@ -6,32 +7,41 @@ const admin = require("firebase-admin");
 const app = express();
 app.use(cors());
 
-// ⚠️ IMPORTANT : ne pas parser webhook ici
-app.use((req, res, next) => {
-  if (req.originalUrl === "/webhook") {
-    next();
-  } else {
-    express.json()(req, res, next);
-  }
-});
-
 // ==========================
 // 🔐 STRIPE
 // ==========================
+if (!process.env.STRIPE_SECRET_KEY) {
+  throw new Error("STRIPE_SECRET_KEY manquante !");
+}
+if (!process.env.STRIPE_WEBHOOK_SECRET) {
+  throw new Error("STRIPE_WEBHOOK_SECRET manquante !");
+}
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // ==========================
 // 🔥 FIREBASE ADMIN
 // ==========================
-const serviceAccount = JSON.parse(
-  process.env.FIREBASE_SERVICE_ACCOUNT.replace(/\\n/g, '\n')
-);
-
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-  });
+if (
+  !process.env.FB_PROJECT_ID ||
+  !process.env.FB_PRIVATE_KEY_ID ||
+  !process.env.FB_PRIVATE_KEY ||
+  !process.env.FB_CLIENT_EMAIL ||
+  !process.env.FB_CLIENT_ID
+) {
+  throw new Error("Une ou plusieurs variables Firebase manquent !");
 }
+
+admin.initializeApp({
+  credential: admin.credential.cert({
+    type: "service_account",
+    project_id: process.env.FB_PROJECT_ID,
+    private_key_id: process.env.FB_PRIVATE_KEY_ID,
+    private_key: process.env.FB_PRIVATE_KEY.replace(/\\n/g, "\n"),
+    client_email: process.env.FB_CLIENT_EMAIL,
+    client_id: process.env.FB_CLIENT_ID,
+  }),
+});
 
 const db = admin.firestore();
 
@@ -43,9 +53,9 @@ app.get("/", (req, res) => {
 });
 
 // ==========================
-// 🛒 CHECKOUT SESSION
+// 🛒 CREATE CHECKOUT SESSION
 // ==========================
-app.post("/create-checkout-session", async (req, res) => {
+app.post("/create-checkout-session", express.json(), async (req, res) => {
   try {
     const { cart, userId } = req.body;
 
@@ -55,7 +65,7 @@ app.post("/create-checkout-session", async (req, res) => {
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
-      line_items: cart.map(item => ({
+      line_items: cart.map((item) => ({
         price_data: {
           currency: "eur",
           product_data: { name: item.nom },
@@ -70,26 +80,24 @@ app.post("/create-checkout-session", async (req, res) => {
       },
       success_url:
         "https://monprijet.vercel.app/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url:
-        "https://monprijet.vercel.app/panier",
+      cancel_url: "https://monprijet.vercel.app/panier",
     });
 
+    console.log("✅ Session Stripe créée :", session.id);
     res.json({ url: session.url });
-
   } catch (err) {
-    console.error("Erreur checkout:", err);
+    console.error("❌ Erreur création session:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
 // ==========================
-// 🔔 WEBHOOK
+// 🔔 WEBHOOK STRIPE
 // ==========================
 app.post(
   "/webhook",
   express.raw({ type: "application/json" }),
   async (req, res) => {
-
     const sig = req.headers["stripe-signature"];
     let event;
 
@@ -100,15 +108,18 @@ app.post(
         process.env.STRIPE_WEBHOOK_SECRET
       );
     } catch (err) {
-      console.error("Signature invalide:", err.message);
+      console.error("❌ Webhook signature invalide :", err.message);
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
+      console.log("💰 Paiement confirmé :", session.id);
 
       try {
-        const items = JSON.parse(session.metadata.items || "[]");
+        const items = session.metadata.items
+          ? JSON.parse(session.metadata.items)
+          : [];
 
         await db.collection("orders").doc(session.id).set({
           userId: session.metadata.userId || "anon",
@@ -117,10 +128,9 @@ app.post(
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         });
 
-        console.log("Commande enregistrée:", session.id);
-
+        console.log("📦 Commande enregistrée dans Firestore :", session.id);
       } catch (err) {
-        console.error("Erreur Firestore:", err);
+        console.error("❌ Erreur Firestore :", err);
       }
     }
 
@@ -129,10 +139,9 @@ app.post(
 );
 
 // ==========================
-// 🚀 START
+// 🚀 START SERVER
 // ==========================
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("Server running on port", PORT);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
