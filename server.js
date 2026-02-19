@@ -39,8 +39,10 @@ app.post("/create-checkout-session", async (req, res) => {
         quantity: item.quantity || 1
       })),
       mode: "payment",
-      success_url: "https://vitejs-vite-qmttwwvi.vercel.app/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url: "https://vitejs-vite-qmttwwvi.vercel.app/panier"
+
+success_url: "https://monprijet.vercel.app/success?session_id={CHECKOUT_SESSION_ID}",
+cancel_url: "https://monprijet.vercel.app/panier"
+      
     })
 
     res.json({ url: session.url })
