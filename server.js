@@ -1,4 +1,3 @@
-//a vérifier 
 const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
@@ -7,27 +6,32 @@ const admin = require("firebase-admin");
 const app = express();
 app.use(cors());
 
+// ⚠️ IMPORTANT : ne pas parser webhook ici
+app.use((req, res, next) => {
+  if (req.originalUrl === "/webhook") {
+    next();
+  } else {
+    express.json()(req, res, next);
+  }
+});
+
 // ==========================
 // 🔐 STRIPE
 // ==========================
-if (!process.env.STRIPE_SECRET_KEY) {
-  throw new Error("STRIPE_SECRET_KEY manquante");
-}
-
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // ==========================
 // 🔥 FIREBASE ADMIN
 // ==========================
-if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-  throw new Error("FIREBASE_SERVICE_ACCOUNT manquante");
+const serviceAccount = JSON.parse(
+  process.env.FIREBASE_SERVICE_ACCOUNT.replace(/\\n/g, '\n')
+);
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+  });
 }
-
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
 
 const db = admin.firestore();
 
@@ -41,7 +45,7 @@ app.get("/", (req, res) => {
 // ==========================
 // 🛒 CHECKOUT SESSION
 // ==========================
-app.post("/create-checkout-session", express.json(), async (req, res) => {
+app.post("/create-checkout-session", async (req, res) => {
   try {
     const { cart, userId } = req.body;
 
@@ -64,8 +68,10 @@ app.post("/create-checkout-session", express.json(), async (req, res) => {
         items: JSON.stringify(cart),
         userId: userId || "anon",
       },
-      success_url: "https://monprijet.vercel.app/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url: "https://monprijet.vercel.app/panier",
+      success_url:
+        "https://monprijet.vercel.app/success?session_id={CHECKOUT_SESSION_ID}",
+      cancel_url:
+        "https://monprijet.vercel.app/panier",
     });
 
     res.json({ url: session.url });
@@ -77,16 +83,12 @@ app.post("/create-checkout-session", express.json(), async (req, res) => {
 });
 
 // ==========================
-// 🔔 WEBHOOK STRIPE
+// 🔔 WEBHOOK
 // ==========================
-
-app.post("/webhook",
+app.post(
+  "/webhook",
   express.raw({ type: "application/json" }),
   async (req, res) => {
-
-    if (!process.env.STRIPE_WEBHOOK_SECRET) {
-      return res.status(500).send("Webhook secret manquant");
-    }
 
     const sig = req.headers["stripe-signature"];
     let event;
@@ -103,14 +105,10 @@ app.post("/webhook",
     }
 
     if (event.type === "checkout.session.completed") {
-
       const session = event.data.object;
-      console.log("Paiement confirmé:", session.id);
 
       try {
-        const items = session.metadata.items
-          ? JSON.parse(session.metadata.items)
-          : [];
+        const items = JSON.parse(session.metadata.items || "[]");
 
         await db.collection("orders").doc(session.id).set({
           userId: session.metadata.userId || "anon",
@@ -131,7 +129,7 @@ app.post("/webhook",
 );
 
 // ==========================
-// 🚀 START SERVER
+// 🚀 START
 // ==========================
 const PORT = process.env.PORT || 3000;
 
