@@ -17,9 +17,18 @@ const {
   FB_CLIENT_EMAIL,
 } = process.env;
 
-// Vérification rapide
-if (!STRIPE_KEY || !STRIPE_WEBHOOK_SECRET) throw new Error("❌ Variables Stripe manquantes !");
-if (!FB_PROJECT_ID || !FB_PRIVATE_KEY || !FB_CLIENT_EMAIL) throw new Error("❌ Variables Firebase manquantes !");
+// -------------------------
+// 🔹 Vérification variables
+// -------------------------
+if (!STRIPE_KEY || !STRIPE_WEBHOOK_SECRET) {
+  throw new Error("❌ Variables Stripe manquantes !");
+}
+
+if (!FB_PROJECT_ID || !FB_PRIVATE_KEY || !FB_CLIENT_EMAIL) {
+  throw new Error("❌ Variables Firebase manquantes !");
+}
+
+console.log("✅ Toutes les variables détectées");
 
 // -------------------------
 // 🔹 Init Stripe
@@ -33,7 +42,7 @@ admin.initializeApp({
   credential: admin.credential.cert({
     type: "service_account",
     project_id: FB_PROJECT_ID,
-    private_key: FB_PRIVATE_KEY, // ⚠️ doit être multi-ligne dans Railway
+    private_key: FB_PRIVATE_KEY, // ⚠️ Multi-ligne propre dans Railway
     client_email: FB_CLIENT_EMAIL,
   }),
 });
@@ -65,35 +74,4 @@ app.post("/create-checkout-session", async (req, res) => {
         product_data: { name: item.nom },
         unit_amount: Math.round(Number(item.prix) * 100),
       },
-      quantity: item.quantity || 1,
-    }));
-
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      line_items,
-      mode: "payment",
-      metadata: { items: JSON.stringify(cart), userId: userId || "anon" },
-      success_url: "https://monprijet.vercel.app/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url: "https://monprijet.vercel.app/panier",
-    });
-
-    console.log("✅ Session Stripe créée :", session.id);
-    res.json({ url: session.url });
-  } catch (err) {
-    console.error("❌ Erreur checkout :", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// -------------------------
-// 🔔 WEBHOOK STRIPE
-// -------------------------
-// ⚠️ express.raw() obligatoire pour Stripe webhook
-app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
-  const sig = req.headers["stripe-signature"];
-  let event;
-
-  try {
-    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
-  } catch (err) {
-    console.error("
+      quantity: item.quantity ||
