@@ -14,7 +14,7 @@ admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
     clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'), // important
+    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
   }),
 });
 
@@ -48,6 +48,12 @@ app.post('/create-checkout-session', async (req, res) => {
       cancel_url: 'https://monprijet.vercel.app/cancel',
     });
 
+    console.log("Session Stripe créée :", session);
+
+    if (!session.url) {
+      return res.status(500).json({ error: "Session Stripe créée mais URL manquante" });
+    }
+
     res.json({ url: session.url });
 
   } catch (error) {
@@ -74,7 +80,6 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  // Paiement réussi
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
 
