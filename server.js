@@ -12,32 +12,25 @@ app.use(bodyParser.json());
 // ==========================
 // 🔐 Stripe
 // ==========================
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const stripe = Stripe("sk_test_51T20K6AwgHqDmd0FodOOJlt0IJo3k3DDysC4Guj5ictyhvEFqP2xdzseyIe78EtW2Xn29Hy9fWY47cBqD2ZYqedw00Uib6Ksqv");
 
 // ==========================
-// 🔥 Firebase sécurisé
+// 🔥 Firebase (clé directement)
 // ==========================
-const privateKey = process.env.FIREBASE_PRIVATE_KEY
-  ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
-  : null;
-
-if (!privateKey) {
-  console.error("❌ FIREBASE_PRIVATE_KEY manquante !");
-  process.exit(1);
-}
+const firebasePrivateKey = "-----BEGIN PRIVATE KEY-----\\nMIIEvgIBADAN...END PRIVATE KEY-----\\n";
 
 admin.initializeApp({
   credential: admin.credential.cert({
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: privateKey,
+    projectId: "formations-29d0f",
+    clientEmail: "firebase-adminsdk-fbsvc@formations-29d0f.iam.gserviceaccount.com",
+    privateKey: firebasePrivateKey.replace(/\\n/g, "\n"),
   }),
 });
 
 const db = admin.firestore();
 
 // ==========================
-// 🛒 Créer une session Checkout
+// 🛒 Créer une session Stripe
 // ==========================
 app.post("/create-checkout-session", async (req, res) => {
   const { items, email } = req.body;
@@ -47,7 +40,7 @@ app.post("/create-checkout-session", async (req, res) => {
       payment_method_types: ["card"],
       mode: "payment",
       customer_email: email,
-      line_items: items.map(item => ({
+      line_items: items.map((item) => ({
         price_data: {
           currency: "usd",
           product_data: { name: item.name },
@@ -55,8 +48,9 @@ app.post("/create-checkout-session", async (req, res) => {
         },
         quantity: item.quantity,
       })),
-      success_url: `https://ton-frontend.com/panier?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `https://ton-frontend.com/panier?cancelled=true`,
+      // ✅ Redirection vers ton frontend Vercel
+      success_url: `https://monprijet.vercel.app/panier?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `https://monprijet.vercel.app/panier?cancelled=true`,
     });
 
     res.json({ url: session.url });
