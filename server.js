@@ -20,8 +20,19 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
+// ----------------------------
+// MIDDLEWARES
+// ----------------------------
 app.use(cors());
-app.use(express.json());
+
+// Pour tous les endpoints sauf /webhook
+app.use((req, res, next) => {
+  if (req.originalUrl === '/webhook') {
+    next();
+  } else {
+    express.json()(req, res, next);
+  }
+});
 
 // ----------------------------
 // CREATE CHECKOUT SESSION
@@ -70,7 +81,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 
   try {
     event = stripe.webhooks.constructEvent(
-      req.body,
+      req.body,              // ⚠️ raw body obligatoire
       sig,
       process.env.STRIPE_WEBHOOK_SECRET
     );
