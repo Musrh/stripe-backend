@@ -42,7 +42,7 @@ admin.initializeApp({
   credential: admin.credential.cert({
     type: "service_account",
     project_id: FB_PROJECT_ID,
-    private_key: FB_PRIVATE_KEY, // ⚠️ Multi-ligne propre dans Railway
+    private_key: FB_PRIVATE_KEY.replace(/\\n/g, "\n"), // ⚠️ Convertir \n en vraie nouvelle ligne
     client_email: FB_CLIENT_EMAIL,
   }),
 });
@@ -66,6 +66,7 @@ app.get("/", (req, res) => res.send("✅ Backend Railway actif"));
 app.post("/create-checkout-session", async (req, res) => {
   try {
     const { cart, userId } = req.body;
+
     if (!cart || cart.length === 0) return res.status(400).json({ error: "Panier vide" });
 
     const line_items = cart.map(item => ({
@@ -74,4 +75,63 @@ app.post("/create-checkout-session", async (req, res) => {
         product_data: { name: item.nom },
         unit_amount: Math.round(Number(item.prix) * 100),
       },
-      quantity: item.quantity ||
+      quantity: item.quantity || 1,
+    }));
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      line_items,
+      mode: "payment",
+      metadata: { items: JSON.stringify(cart), userId: userId || "anon" },
+      success_url: "https://monprijet.vercel.app/success?session_id={CHECKOUT_SESSION_ID}",
+      cancel_url: "https://monprijet.vercel.app/panier",
+    });
+
+    console.log("✅ Session Stripe créée :", session.id);
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error("❌ Erreur checkout :", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -------------------------
+// 🔔 WEBHOOK STRIPE
+// -------------------------
+app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  const sig = req.headers["stripe-signature"];
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error("❌ Signature webhook invalide :", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    console.log("💰 Paiement confirmé :", session.id);
+
+    try {
+      const items = session.metadata.items ? JSON.parse(session.metadata.items) : [];
+      await db.collection("orders").doc(session.id).set({
+        userId: session.metadata.userId || "anon",
+        items,
+        amount: session.amount_total / 100,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.log("📦 Commande enregistrée :", session.id);
+    } catch (err) {
+      console.error("❌ Erreur Firestore :", err);
+    }
+  }
+
+  res.json({ received: true });
+});
+
+// -------------------------
+// 🚀 Lancement serveur
+// -------------------------
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server running on port ${PORT}`));
