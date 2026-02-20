@@ -81,7 +81,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 
   try {
     event = stripe.webhooks.constructEvent(
-      req.body,              // ⚠️ raw body obligatoire
+      req.body,              
       sig,
       process.env.STRIPE_WEBHOOK_SECRET
     );
@@ -112,6 +112,28 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
   }
 
   res.json({ received: true });
+});
+
+// ----------------------------
+// TEST FIRESTORE
+// ----------------------------
+app.get('/test-firestore', async (req, res) => {
+  try {
+    const docRef = await db.collection('commandes').add({
+      stripeSessionId: "test-session",
+      email: "test@example.com",
+      montant: 1000,
+      devise: "eur",
+      statut: "payé",
+      date: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    console.log("✅ Document Firestore créé :", docRef.id);
+    res.send(`Document Firestore créé avec ID : ${docRef.id}`);
+  } catch (err) {
+    console.error("❌ Erreur Firestore :", err);
+    res.status(500).send("Erreur Firestore");
+  }
 });
 
 // ----------------------------
