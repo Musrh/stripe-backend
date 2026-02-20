@@ -1,4 +1,4 @@
-// server.js
+// server.js - Stripe + Firestore stable pour Railway
 const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
@@ -20,13 +20,10 @@ const {
 // -------------------------
 // 🔹 Vérification variables
 // -------------------------
-if (!STRIPE_KEY || !STRIPE_WEBHOOK_SECRET) {
+if (!STRIPE_KEY || !STRIPE_WEBHOOK_SECRET)
   throw new Error("❌ Variables Stripe manquantes !");
-}
-
-if (!FB_PROJECT_ID || !FB_PRIVATE_KEY || !FB_CLIENT_EMAIL) {
+if (!FB_PROJECT_ID || !FB_PRIVATE_KEY || !FB_CLIENT_EMAIL)
   throw new Error("❌ Variables Firebase manquantes !");
-}
 
 console.log("✅ Toutes les variables détectées");
 
@@ -42,7 +39,7 @@ admin.initializeApp({
   credential: admin.credential.cert({
     type: "service_account",
     project_id: FB_PROJECT_ID,
-    private_key: FB_PRIVATE_KEY.replace(/\\n/g, "\n"), // ⚠️ Convertir \n en vraie nouvelle ligne
+    private_key: FB_PRIVATE_KEY.replace(/\\n/g, "\n"), // ⚠️ Convertit les \n en retours à la ligne
     client_email: FB_CLIENT_EMAIL,
   }),
 });
@@ -53,7 +50,7 @@ const db = admin.firestore();
 // 🔹 Middleware
 // -------------------------
 app.use(cors({ origin: "https://monprijet.vercel.app" }));
-app.use(express.json());
+app.use(express.json()); // pour toutes les routes sauf webhook
 
 // -------------------------
 // 🧪 Route test
@@ -66,8 +63,8 @@ app.get("/", (req, res) => res.send("✅ Backend Railway actif"));
 app.post("/create-checkout-session", async (req, res) => {
   try {
     const { cart, userId } = req.body;
-
-    if (!cart || cart.length === 0) return res.status(400).json({ error: "Panier vide" });
+    if (!cart || cart.length === 0)
+      return res.status(400).json({ error: "Panier vide" });
 
     const line_items = cart.map(item => ({
       price_data: {
@@ -106,32 +103,4 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
   } catch (err) {
     console.error("❌ Signature webhook invalide :", err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-    console.log("💰 Paiement confirmé :", session.id);
-
-    try {
-      const items = session.metadata.items ? JSON.parse(session.metadata.items) : [];
-      await db.collection("orders").doc(session.id).set({
-        userId: session.metadata.userId || "anon",
-        items,
-        amount: session.amount_total / 100,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      console.log("📦 Commande enregistrée :", session.id);
-    } catch (err) {
-      console.error("❌ Erreur Firestore :", err);
-    }
-  }
-
-  res.json({ received: true });
-});
-
-// -------------------------
-// 🚀 Lancement serveur
-// -------------------------
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server running on port ${PORT}`));
+    return res.status(400).send(`Webhook Error: ${err.message
