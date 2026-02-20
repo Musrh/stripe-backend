@@ -8,7 +8,7 @@ const app = express();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // ----------------------------
-// FIREBASE INIT (sans Base64)
+// FIREBASE INIT
 // ----------------------------
 admin.initializeApp({
   credential: admin.credential.cert({
@@ -48,14 +48,13 @@ app.post('/create-checkout-session', async (req, res) => {
       cancel_url: 'https://monprijet.vercel.app/cancel',
     });
 
-    console.log("Session Stripe créée :", session);
+    console.log("Session Stripe créée :", session.id);
 
     if (!session.url) {
       return res.status(500).json({ error: "Session Stripe créée mais URL manquante" });
     }
 
     res.json({ url: session.url });
-
   } catch (error) {
     console.error("Erreur création session:", error);
     res.status(500).json({ error: error.message });
@@ -76,12 +75,15 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
       process.env.STRIPE_WEBHOOK_SECRET
     );
   } catch (err) {
-    console.error("Webhook signature error:", err.message);
+    console.error("❌ Webhook signature error:", err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
+  console.log("Webhook reçu :", event.type);
+
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
+    console.log("Session Stripe du webhook :", session);
 
     try {
       await db.collection('commandes').add({
@@ -92,9 +94,9 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
         statut: 'payé',
         date: admin.firestore.FieldValue.serverTimestamp(),
       });
-      console.log("Commande enregistrée dans Firestore ✅");
+      console.log("✅ Commande enregistrée dans Firestore");
     } catch (err) {
-      console.error("Erreur Firestore :", err);
+      console.error("❌ Erreur Firestore :", err);
     }
   }
 
