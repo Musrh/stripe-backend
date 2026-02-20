@@ -4,36 +4,35 @@ const Stripe = require("stripe");
 const admin = require("firebase-admin");
 
 const app = express();
-
-// ✅ Middleware global pour les routes normales
 app.use(cors());
-app.use(express.json()); // pour toutes les routes JSON sauf webhook
+app.use(express.json());
 
-// 🔹 Variables
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
-const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
-const { FB_PROJECT_ID, FB_PRIVATE_KEY_ID, FB_PRIVATE_KEY, FB_CLIENT_EMAIL, FB_CLIENT_ID } = process.env;
+const { FB_PROJECT_ID, FB_PRIVATE_KEY, FB_CLIENT_EMAIL } = process.env;
 
-// 🔹 Vérification
-if (!STRIPE_KEY) throw new Error("❌ STRIPE_SECRET_KEY manquante");
-if (!FB_PROJECT_ID || !FB_PRIVATE_KEY || !FB_CLIENT_EMAIL) throw new Error("❌ Variables Firebase manquantes");
+if (!STRIPE_KEY || !FB_PROJECT_ID || !FB_PRIVATE_KEY || !FB_CLIENT_EMAIL) {
+  throw new Error("❌ Variables manquantes !");
+}
 
-// 🔹 Init Stripe + Firebase
+// Stripe
 const stripe = new Stripe(STRIPE_KEY);
+
+// Firebase
 admin.initializeApp({
   credential: admin.credential.cert({
     type: "service_account",
     project_id: FB_PROJECT_ID,
-    private_key: FB_PRIVATE_KEY.replace(/\\n/g, "\n"),
+    private_key: FB_PRIVATE_KEY, // si multi-ligne
     client_email: FB_CLIENT_EMAIL,
   }),
 });
+
 const db = admin.firestore();
 
-// 🧪 Route test
+// Route test
 app.get("/", (req, res) => res.send("✅ Backend Railway actif"));
 
-// 🛒 CREATE CHECKOUT SESSION (comme avant)
+// Checkout session
 app.post("/create-checkout-session", async (req, res) => {
   try {
     const { cart, userId } = req.body;
@@ -55,10 +54,11 @@ app.post("/create-checkout-session", async (req, res) => {
 
     res.json({ url: session.url });
   } catch (err) {
+    console.error("❌ Erreur checkout :", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// 🚀 START SERVER
+// Lancement serveur
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => console.log("🚀 Server running on port", PORT));
+app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server running on port ${PORT}`));
