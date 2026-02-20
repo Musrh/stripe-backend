@@ -1,4 +1,4 @@
-// server.js stable pour Railway
+// server.js complet pour Railway (Stripe + Firestore)
 const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
@@ -7,22 +7,36 @@ const admin = require("firebase-admin");
 const app = express();
 app.use(cors());
 
-// ---------------------
-// Vérification variables
-// ---------------------
+// ==========================
+// 🔹 Vérification variables
+// ==========================
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
-const { FB_PROJECT_ID, FB_PRIVATE_KEY_ID, FB_PRIVATE_KEY, FB_CLIENT_EMAIL, FB_CLIENT_ID } = process.env;
+const {
+  FB_PROJECT_ID,
+  FB_PRIVATE_KEY_ID,
+  FB_PRIVATE_KEY,
+  FB_CLIENT_EMAIL,
+  FB_CLIENT_ID,
+} = process.env;
 
-if (!STRIPE_KEY || !STRIPE_WEBHOOK_SECRET) throw new Error("Variables Stripe manquantes");
+console.log("🔹 Vérification variables...");
+console.log("STRIPE_KEY :", !!STRIPE_KEY);
+console.log("STRIPE_WEBHOOK_SECRET :", !!STRIPE_WEBHOOK_SECRET);
+console.log("FB_PROJECT_ID :", !!FB_PROJECT_ID);
+console.log("FB_PRIVATE_KEY_ID :", !!FB_PRIVATE_KEY_ID);
+console.log("FB_PRIVATE_KEY :", !!FB_PRIVATE_KEY);
+console.log("FB_CLIENT_EMAIL :", !!FB_CLIENT_EMAIL);
+console.log("FB_CLIENT_ID :", !!FB_CLIENT_ID);
+
+if (!STRIPE_KEY || !STRIPE_WEBHOOK_SECRET)
+  throw new Error("❌ Variables Stripe manquantes !");
 if (!FB_PROJECT_ID || !FB_PRIVATE_KEY_ID || !FB_PRIVATE_KEY || !FB_CLIENT_EMAIL || !FB_CLIENT_ID)
-  throw new Error("Variables Firebase manquantes");
+  throw new Error("❌ Une ou plusieurs variables Firebase manquent !");
 
-console.log("✅ Toutes les variables détectées");
-
-// ---------------------
-// Init Stripe et Firebase
-// ---------------------
+// ==========================
+// 🔹 Init Stripe et Firebase
+// ==========================
 const stripe = new Stripe(STRIPE_KEY);
 
 admin.initializeApp({
@@ -30,25 +44,26 @@ admin.initializeApp({
     type: "service_account",
     project_id: FB_PROJECT_ID,
     private_key_id: FB_PRIVATE_KEY_ID,
-    private_key: FB_PRIVATE_KEY.replace(/\\n/g, "\n"),
+    private_key: FB_PRIVATE_KEY.replace(/\\n/g, "\n"), // conversion des \n
     client_email: FB_CLIENT_EMAIL,
     client_id: FB_CLIENT_ID,
   }),
 });
+
 const db = admin.firestore();
 
-// ---------------------
-// Route test
-// ---------------------
+// ==========================
+// 🧪 Route test
+// ==========================
 app.get("/", (req, res) => res.send("✅ Backend Railway actif"));
 
-// ---------------------
-// Checkout session
-// ---------------------
+// ==========================
+// 🛒 CREATE CHECKOUT SESSION
+// ==========================
 app.post("/create-checkout-session", express.json(), async (req, res) => {
   try {
     const { cart, userId } = req.body;
-    if (!cart || !cart.length) return res.status(400).json({ error: "Panier vide" });
+    if (!cart || cart.length === 0) return res.status(400).json({ error: "Panier vide" });
 
     const line_items = cart.map(item => {
       const amount = Math.round(Number(item.prix) * 100);
@@ -80,12 +95,13 @@ app.post("/create-checkout-session", express.json(), async (req, res) => {
   }
 });
 
-// ---------------------
-// Webhook Stripe
-// ---------------------
+// ==========================
+// 🔔 WEBHOOK STRIPE
+// ==========================
 app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   const sig = req.headers["stripe-signature"];
   let event;
+
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
   } catch (err) {
@@ -96,25 +112,9 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
     console.log("💰 Paiement confirmé :", session.id);
+
     try {
       const items = session.metadata.items ? JSON.parse(session.metadata.items) : [];
       await db.collection("orders").doc(session.id).set({
         userId: session.metadata.userId || "anon",
         items,
-        amount: session.amount_total / 100,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      console.log("📦 Commande enregistrée :", session.id);
-    } catch (err) {
-      console.error("❌ Erreur Firestore :", err);
-    }
-  }
-
-  res.json({ received: true });
-});
-
-// ---------------------
-// Start serveur
-// ---------------------
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server running on port ${PORT}`));
