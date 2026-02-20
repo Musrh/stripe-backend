@@ -1,4 +1,3 @@
-require("dotenv").config();
 const express = require("express");
 const Stripe = require("stripe");
 const admin = require("firebase-admin");
@@ -6,11 +5,31 @@ const bodyParser = require("body-parser");
 
 const app = express();
 
-// Stripe
+// ============================
+// 🔐 Vérification variables
+// ============================
+
+if (
+  !process.env.STRIPE_SECRET_KEY ||
+  !process.env.STRIPE_WEBHOOK_SECRET ||
+  !process.env.FIREBASE_PROJECT_ID ||
+  !process.env.FIREBASE_CLIENT_EMAIL ||
+  !process.env.FIREBASE_PRIVATE_KEY
+) {
+  throw new Error("❌ Une variable d'environnement est manquante");
+}
+
+// ============================
+// 💳 Stripe
+// ============================
+
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-// Firebase init (sans fichier JSON)
+// ============================
+// 🔥 Firebase
+// ============================
+
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
@@ -21,7 +40,10 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-// ⚠️ Route webhook AVANT express.json()
+// ============================
+// 🎯 WEBHOOK STRIPE
+// ============================
+
 app.post(
   "/webhook",
   bodyParser.raw({ type: "application/json" }),
@@ -46,6 +68,13 @@ app.post(
       const session = event.data.object;
 
       try {
+        // Éviter doublon
+        const existing = await db.collection("orders").doc(session.id).get();
+        if (existing.exists) {
+          console.log("⚠️ Commande déjà enregistrée");
+          return res.json({ received: true });
+        }
+
         await db.collection("orders").doc(session.id).set({
           stripeSessionId: session.id,
           paymentIntent: session.payment_intent,
@@ -56,7 +85,7 @@ app.post(
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         });
 
-        console.log("✅ Commande enregistrée dans Firestore !");
+        console.log("✅ Commande enregistrée dans Firestore");
       } catch (error) {
         console.error("❌ Erreur Firestore:", error);
       }
@@ -66,12 +95,12 @@ app.post(
   }
 );
 
-// Middleware JSON pour les autres routes
-app.use(express.json());
+// ============================
+// 🌍 Route test
+// ============================
 
-// Route test
 app.get("/", (req, res) => {
-  res.send("Server OK 🚀");
+  res.send("🚀 Server OK");
 });
 
 const PORT = process.env.PORT || 3000;
