@@ -15,13 +15,22 @@ app.use(bodyParser.json());
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 // ==========================
-// 🔥 Firebase
+// 🔥 Firebase sécurisé
 // ==========================
+const privateKey = process.env.FIREBASE_PRIVATE_KEY
+  ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
+  : null;
+
+if (!privateKey) {
+  console.error("❌ FIREBASE_PRIVATE_KEY manquante !");
+  process.exit(1);
+}
+
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
     clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+    privateKey: privateKey,
   }),
 });
 
@@ -38,7 +47,7 @@ app.post("/create-checkout-session", async (req, res) => {
       payment_method_types: ["card"],
       mode: "payment",
       customer_email: email,
-      line_items: items.map((item) => ({
+      line_items: items.map(item => ({
         price_data: {
           currency: "usd",
           product_data: { name: item.name },
@@ -108,6 +117,4 @@ app.get("/", (req, res) => {
 // 🚀 Lancer le serveur
 // ==========================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
