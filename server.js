@@ -1,13 +1,11 @@
 const express = require("express");
 const Stripe = require("stripe");
 const admin = require("firebase-admin");
-const bodyParser = require("body-parser");
 const cors = require("cors");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(bodyParser.json());
 
 // ==========================
 // 🔐 Stripe
@@ -15,15 +13,17 @@ app.use(bodyParser.json());
 const stripe = Stripe("sk_test_51T20K6AwgHqDmd0FodOOJlt0IJo3k3DDysC4Guj5ictyhvEFqP2xdzseyIe78EtW2Xn29Hy9fWY47cBqD2ZYqedw00Uib6Ksqv");
 
 // ==========================
-// 🔥 Firebase (clé directement)
+// 🔥 Firebase avec template string (clé directe)
 // ==========================
-const firebasePrivateKey = "-----BEGIN PRIVATE KEY-----\\nMIIEvgIBADAN...END PRIVATE KEY-----\\n";
+const firebasePrivateKey = `-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASC...
+-----END PRIVATE KEY-----`;
 
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: "formations-29d0f",
     clientEmail: "firebase-adminsdk-fbsvc@formations-29d0f.iam.gserviceaccount.com",
-    privateKey: firebasePrivateKey.replace(/\\n/g, "\n"),
+    privateKey: firebasePrivateKey,
   }),
 });
 
@@ -48,7 +48,6 @@ app.post("/create-checkout-session", async (req, res) => {
         },
         quantity: item.quantity,
       })),
-      // ✅ Redirection vers ton frontend Vercel
       success_url: `https://monprijet.vercel.app/panier?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `https://monprijet.vercel.app/panier?cancelled=true`,
     });
