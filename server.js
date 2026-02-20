@@ -13,10 +13,35 @@ app.use(express.json());
 const stripe = Stripe("sk_test_51T20K6AwgHqDmd0FodOOJlt0IJo3k3DDysC4Guj5ictyhvEFqP2xdzseyIe78EtW2Xn29Hy9fWY47cBqD2ZYqedw00Uib6Ksqv");
 
 // ==========================
-// 🔥 Firebase avec template string (clé directe)
+// 🔥 Firebase (clé complète via template string)
 // ==========================
 const firebasePrivateKey = `-----BEGIN PRIVATE KEY-----
-MIIEvgIBADANBgkqhkiG9w0BAQEFAASC...
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDponLcXoWxLn6X
+HscujFx0JJcT3vPBr3Mn9DfBKCWZofB0NCp6p92egwrYOtXCUjUDnrMGTVeipbR0
+GtNvAAr8oz0cAaIQc3LHHBZP/mRkEarllXJCwwh9A5czVfMOZ6F7/CbKoHZ8pynt
+d25y1vCyiPxgduJjmgAldL2bwUhZGp9VknuFk7ICQ3kqrog0o0ikSlxxQUOkEa6g
+wW1JG43r7PXcr898sw2EpjjTf4jo9Di/qWCwYbmdLe3Mawuby6WhziKrtCThV8YU
+1UkGSNq07Uo64ngBC0RhwZZ+c/BWT3eSB9Q1GeUOUICi+MxEcB9ja83ND+qfVM6N
+An3kYJbbAgMBAAECggEAWfdcvKBHYhmx1JadA784EN9QL+4wNlrOAMopuB8yD22N
+DupRm0bN7+6tO+O4EaqfUIQJkzkwMGkXyofT+E/vayae7wxv8F7MiYC21Nn0pZYq
+FVtNkwjQWXeK/1EvFdJxHDHWbDuLNOgYHKHbbax4Jn/ak3jkJ4+TU9kW9IXiyrBZ
+vki/zfU6uvzYGLsg9raIrMHKGNpUHX/874zP9XbkUAHe/6Dn5FhiYWSZngZm91xW
+49CJJqNVsKEWHajyLgrlt1vxl5p3/8d0sYvn+kxS+yydK0rrJqKR3tjoJdgFAyb7
+fJvCTs3juuOiOkzfi+1eCLsPs+a6kTzE4kfQht9hvQKBgQD+sQshWneWXzVdhCC/
+kUWnTNH95piAoheZ1/b85Qm7HFV0dGNy6ac34cSngC9NnGaZPlWkzJ5GrCfQ5zHr
+uTuHi11YZKLdXlebF57hzIASzCr+quT7EnFxLvWkddjiDFhyjb/6twhEIMmAK0Hy
+0GOgLX6fAY6N3oqmaP5akY7tpQKBgQDq1bZQKg3x6YzjKF6wJaAXDNX2+YJKcpRo
+fMtQ/1NcfeuZeWG+uwqW7uKxjUGF2uQoyGrRKkEpJNy3t13L/78fU+Q8H6hEaQMY
+QhRRquW79aVgSFjXOTu/x0wn7nFIvLRFOkEs95PEIUDQZU1C/nCReAtbXkPPAXby
++F/fWftKfwKBgB1wK0Asq7vmv01S01IxIWLn/zGgsKnVknLGwpaShqBo8vul5ETI
++vn7j3Zo247V8AnwaYfF2tmCVovP3TZIz7eoBR8NasG5gNi9TzD8KSWDEckjyZm3
+lQMnEV9z+6CNGsAK4FDDTSJKw9+boGDHc2x1Nbh9PpPpUA9R/WxMfL+9AoGAAsM+
+4NSN03G+8ZExA/t9VagWAFDRIpUUf+Iv9iT60xS8J9MQvlCvADWRPyt9QNjhZEVv
+VESd/aDsY9DpbpP0qKaxAbARp7Rgj/F/EbLj/wEVz/sp6GZI+KmckL+yX3uw1zun
+NqM2/tCxVYJLlWUu59c0sv955r6KqrMXVaZWWXsCgYEA5SkiJhLDW+YBgJihDPXM
+yYZgn59AGIgSEzvoOq86TDN9sBkej3CKctIFX2C2U5EILrB9ebnFYZMV3jgC3r+V
+57M3G6hW9v+gXMbIjMq2nfATrWKp86DOw1G9Zj/M3DL8E8G02wo6oB4mbLvdFgRd
+VHyy1I23+rdIiKoJvzjF0Ks=
 -----END PRIVATE KEY-----`;
 
 admin.initializeApp({
