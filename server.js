@@ -8,14 +8,12 @@ const app = express();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // ----------------------------
-// FIREBASE INIT
+// FIREBASE INIT (VERSION STABLE)
 // ----------------------------
 admin.initializeApp({
-  credential: admin.credential.cert({
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-  }),
+  credential: admin.credential.cert(
+    JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+  ),
 });
 
 const db = admin.firestore();
@@ -25,7 +23,7 @@ const db = admin.firestore();
 // ----------------------------
 app.use(cors());
 
-// 🚨 IMPORTANT : WEBHOOK AVANT express.json()
+// 🚨 WEBHOOK AVANT express.json()
 app.post(
   '/webhook',
   express.raw({ type: 'application/json' }),
@@ -36,7 +34,7 @@ app.post(
 
     try {
       event = stripe.webhooks.constructEvent(
-        req.body, // ⚠️ RAW BODY obligatoire
+        req.body,
         sig,
         process.env.STRIPE_WEBHOOK_SECRET
       );
@@ -73,7 +71,7 @@ app.post(
   }
 );
 
-// ✅ JSON parsing UNIQUEMENT pour les autres routes
+// ✅ JSON parsing pour les autres routes
 app.use(express.json());
 
 // ----------------------------
@@ -82,6 +80,7 @@ app.use(express.json());
 app.post('/create-checkout-session', async (req, res) => {
   try {
     const items = req.body.items || [];
+
     if (!items.length)
       return res.status(400).json({ error: 'Panier vide' });
 
@@ -103,7 +102,7 @@ app.post('/create-checkout-session', async (req, res) => {
       cancel_url: 'https://monprijet.vercel.app/cancel',
     });
 
-    console.log("Session créée :", session.id);
+    console.log("✅ Session créée :", session.id);
 
     res.json({ url: session.url });
 
