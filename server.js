@@ -39,14 +39,14 @@ app.use((req, res, next) => {
 // ----------------------------
 app.post('/create-checkout-session', async (req, res) => {
   try {
-    const items = req.body.items || [];
+    const items = req.body.cart || [];
     if (!items.length) return res.status(400).json({ error: 'Panier vide' });
 
     const line_items = items.map(i => ({
       price_data: {
         currency: 'eur',
-        product_data: { name: i.name },
-        unit_amount: i.amount,
+        product_data: { name: i.nom },
+        unit_amount: i.prix * 100, // en centimes
       },
       quantity: i.quantity,
     }));
@@ -60,10 +60,6 @@ app.post('/create-checkout-session', async (req, res) => {
     });
 
     console.log("Session Stripe créée :", session.id);
-
-    if (!session.url) {
-      return res.status(500).json({ error: "Session Stripe créée mais URL manquante" });
-    }
 
     res.json({ url: session.url });
   } catch (error) {
@@ -81,7 +77,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 
   try {
     event = stripe.webhooks.constructEvent(
-      req.body,              
+      req.body,
       sig,
       process.env.STRIPE_WEBHOOK_SECRET
     );
