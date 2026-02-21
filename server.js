@@ -25,10 +25,11 @@ const db = admin.firestore()
 app.use(cors())
 app.use(express.json())
 
-// 🔹 Créer une session Stripe Checkout
+// 🔹 Créer une session Stripe Checkout et renvoyer session.url
 app.post('/create-checkout-session', async (req, res) => {
   try {
     const items = req.body.items
+
     if (!items || !Array.isArray(items)) {
       return res.status(400).json({ error: 'Panier invalide' })
     }
@@ -50,7 +51,7 @@ app.post('/create-checkout-session', async (req, res) => {
       cancel_url: process.env.CANCEL_URL,   // ex: 'https://monprojet.vercel.app/cancel'
     })
 
-    // 🔹 On renvoie l'URL Stripe
+    // 🔹 Ici on renvoie url pour que le frontend redirige directement
     res.json({ url: session.url })
   } catch (error) {
     console.error('Erreur création session:', error)
@@ -61,7 +62,7 @@ app.post('/create-checkout-session', async (req, res) => {
 // 🔹 Webhook Stripe pour enregistrer la commande dans Firestore
 app.post(
   '/webhook',
-  express.raw({ type: 'application/json' }), // ⚠️ obligatoire pour Stripe
+  express.raw({ type: 'application/json' }),
   async (req, res) => {
     const sig = req.headers['stripe-signature']
     let event
