@@ -1,21 +1,15 @@
-require('dotenv').config()
-const express = require('express')
-const cors = require('cors')
-const Stripe = require('stripe')
-const admin = require('firebase-admin')
+import express from 'express'
+import cors from 'cors'
+import Stripe from 'stripe'
+import admin from 'firebase-admin'
 
 const app = express()
+const port = process.env.PORT || 8080
 
-/* ================================
-   🔥 STRIPE
-================================ */
+// 🔹 Stripe
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
 
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY)
-
-/* ================================
-   🔥 FIREBASE ADMIN INIT
-================================ */
-
+// 🔹 Firebase
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
@@ -26,69 +20,18 @@ admin.initializeApp({
 
 const db = admin.firestore()
 
-/* ================================
-   🔥 MIDDLEWARE
-================================ */
-
+// 🔹 Middlewares
 app.use(cors())
+app.use(express.json()) // pour recevoir JSON normal
 
-// ⚠️ IMPORTANT : webhook AVANT express.json()
-app.post(
-  '/webhook',
-  express.raw({ type: 'application/json' }),
-  async (req, res) => {
-    const sig = req.headers['stripe-signature']
-
-    let event
-
-    try {
-      event = stripe.webhooks.constructEvent(
-        req.body,
-        sig,
-        process.env.STRIPE_WEBHOOK_SECRET
-      )
-      console.log('✅ Webhook reçu :', event.type)
-    } catch (err) {
-      console.error('❌ Erreur signature webhook :', err.message)
-      return res.status(400).send(`Webhook Error: ${err.message}`)
-    }
-
-    /* ================================
-       🎯 CHECKOUT SUCCESS
-    ================================ */
-    if (event.type === 'checkout.session.completed') {
-      const session = event.data.object
-
-      try {
-        await db.collection('commandes').add({
-          sessionId: session.id,
-          email: session.customer_email,
-          montant: session.amount_total / 100,
-          currency: session.currency,
-          paymentStatus: session.payment_status,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        })
-
-        console.log('🔥 Commande enregistrée dans Firestore')
-      } catch (error) {
-        console.error('🔥 ERREUR FIRESTORE :', error)
-      }
-    }
-
-    res.json({ received: true })
-  }
-)
-
-// ⚠️ DOIT être après le webhook
-app.use(express.json())
-
-/* ================================
-   🛒 CREER SESSION CHECKOUT
-================================ */
-
+// 🔹 Créer une session Stripe
 app.post('/create-checkout-session', async (req, res) => {
   try {
-    const { panier } = req.body
+    const panier = req.body // on récupère le body directement
+
+    if (!panier || !Array.isArray(panier)) {
+      return res.status(400).json({ error: "Panier invalide" })
+    }
 
     const line_items = panier.map((item) => ({
       price_data: {
@@ -111,16 +54,75 @@ app.post('/create-checkout-session', async (req, res) => {
 
     res.json({ id: session.id })
   } catch (error) {
-    console.error(error)
+    console.error("Erreur création session:", error)
     res.status(500).json({ error: error.message })
   }
 })
 
-/* ================================
-   🚀 START SERVER
-================================ */
+// 🔹 Webhook Stripe pour enregistrer la commande
+app.post(
+  '/webhook',
+  express.raw({ type: 'application/json' }), // ⚠️ important pour le webhook
+  async (req, res) => {
+    const sig = req.headers['stripe-signature']
+    let event
 
-const PORT = process.env.PORT || 8080
-app.listen(PORT, () => {
-  console.log('🚀 Server démarré sur port', PORT)
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET
+      )
+    } catch (err) {
+      console.error("❌ Webhook signature error:", err.message)
+      return res.status(400).send(`Webhook Error: ${err.message}`)
+    }
+
+    console.log("✅ Webhook reçu :", event.type)
+
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object
+      console.log("Session Stripe du webhook :", session)
+
+      try {
+        await db.collection('commandes').add({
+          stripeSessionId: session.id,
+          email: session.customer_details?.email || null,
+          montant: session.amount_total,
+          devise: session.currency,
+          statut: 'payé',
+          date: admin.firestore.FieldValue.serverTimestamp(),
+        })
+        console.log("✅ Commande enregistrée dans Firestore")
+      } catch (err) {
+        console.error("❌ Erreur Firestore :", err)
+      }
+    }
+
+    res.json({ received: true })
+  }
+)
+
+// 🔹 Test Firestore
+app.get('/test-firestore', async (req, res) => {
+  try {
+    const docRef = await db.collection('commandes').add({
+      stripeSessionId: "test-session",
+      email: "test@example.com",
+      montant: 1000,
+      devise: "eur",
+      statut: "payé",
+      date: admin.firestore.FieldValue.serverTimestamp(),
+    })
+
+    console.log("✅ Document Firestore créé :", docRef.id)
+    res.send(`Document Firestore créé avec ID : ${docRef.id}`)
+  } catch (err) {
+    console.error("❌ Erreur Firestore :", err)
+    res.status(500).send("Erreur Firestore")
+  }
+})
+
+app.listen(port, () => {
+  console.log(`🚀 Server démarré sur port ${port}`)
 })
