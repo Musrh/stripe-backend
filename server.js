@@ -55,8 +55,8 @@ app.post('/create-checkout-session', async (req, res) => {
       mode: 'payment',
       payment_method_types: ['card'],
       line_items,
-      success_url: process.env.SUCCESS_URL,
-      cancel_url: process.env.CANCEL_URL,
+      success_url: 'https://monprijet.vercel.app/success',
+      cancel_url: 'https://monprijet.vercel.app/cancel',
     });
 
     console.log("Session Stripe créée :", session.id);
@@ -81,7 +81,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 
   try {
     event = stripe.webhooks.constructEvent(
-      req.body,
+      req.body,              
       sig,
       process.env.STRIPE_WEBHOOK_SECRET
     );
@@ -94,14 +94,14 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
-    console.log("🔥 Session Stripe complète :", JSON.stringify(session, null, 2));
+    console.log("Session Stripe du webhook :", session);
 
     try {
       await db.collection('commandes').add({
-        stripeSessionId: session.id || "inconnu",
-        email: session.customer_details?.email || "inconnu@example.com",
-        montant: session.amount_total || session.amount_subtotal || 0,
-        devise: session.currency || "eur",
+        stripeSessionId: session.id,
+        email: session.customer_details?.email || null,
+        montant: session.amount_total,
+        devise: session.currency,
         statut: 'payé',
         date: admin.firestore.FieldValue.serverTimestamp(),
       });
