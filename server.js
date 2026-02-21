@@ -1,62 +1,104 @@
-require("dotenv").config();
-const express = require("express");
-const cors = require("cors");
-const Stripe = require("stripe");
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const Stripe = require('stripe');
+const admin = require('firebase-admin');
 
 const app = express();
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ✅ IMPORTANT
+// ----------------------------
+// FIREBASE INIT
+// ----------------------------
+admin.initializeApp({
+  credential: admin.credential.cert({
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+  }),
+});
+const db = admin.firestore();
+
+// ----------------------------
+// MIDDLEWARES
+// ----------------------------
 app.use(cors());
-app.use(express.json());
+app.use(express.json()); // JSON parsing pour /create-checkout-session
 
-// ==============================
+// ----------------------------
 // CREATE CHECKOUT SESSION
-// ==============================
-app.post("/create-checkout-session", async (req, res) => {
+// ----------------------------
+app.post('/create-checkout-session', async (req, res) => {
   try {
+    const items = req.body.items || [];
+    if (!items.length) return res.status(400).json({ error: 'Panier vide' });
 
-    console.log("Données reçues :", req.body);
-
-    const items = req.body.items;
-
-    if (!items || items.length === 0) {
-      return res.status(400).json({ error: "Panier vide" });
-    }
-
-    const line_items = items.map(item => ({
+    const line_items = items.map(i => ({
       price_data: {
-        currency: "eur",
-        product_data: {
-          name: item.nom
-        },
-        unit_amount: item.prix * 100
+        currency: 'eur',
+        product_data: { name: i.nom },
+        unit_amount: i.prix * 100, // Stripe attend les centimes
       },
-      quantity: item.quantity
+      quantity: i.quantity,
     }));
 
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      mode: "payment",
+      mode: 'payment',
+      payment_method_types: ['card'],
       line_items,
-      success_url: "https://monprijet.vercel.app/success",
-      cancel_url: "https://monprijet.vercel.app/cancel"
+      metadata: { items: JSON.stringify(items) }, // 🔹 pour le webhook
+      success_url: 'https://monprijet.vercel.app/success',
+      cancel_url: 'https://monprijet.vercel.app/cancel',
     });
 
-    console.log("Session créée :", session.id);
-
     res.json({ url: session.url });
-
-  } catch (error) {
-    console.error("ERREUR :", error.message);
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ==============================
-// START SERVER
-// ==============================
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("Serveur démarré sur port", PORT);
+// ----------------------------
+// WEBHOOK
+// ----------------------------
+app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error("Webhook signature error:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    try {
+      await db.collection('commandes').add({
+        stripeSessionId: session.id,
+        email: session.customer_details?.email || null,
+        montant: session.amount_total / 100,
+        devise: session.currency,
+        statut: 'payé',
+        date: admin.firestore.FieldValue.serverTimestamp(),
+        items: session.metadata?.items ? JSON.parse(session.metadata.items) : []
+      });
+      console.log("✅ Commande enregistrée dans Firestore");
+    } catch (err) {
+      console.error("❌ Erreur Firestore :", err);
+    }
+  }
+
+  res.json({ received: true });
 });
+
+// ----------------------------
+// START SERVER
+// ----------------------------
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Serveur démarré sur port ${PORT}`));
