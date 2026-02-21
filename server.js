@@ -1,15 +1,16 @@
-import express from 'express'
-import cors from 'cors'
-import Stripe from 'stripe'
-import admin from 'firebase-admin'
+require('dotenv').config()
+const express = require('express')
+const cors = require('cors')
+const Stripe = require('stripe')
+const admin = require('firebase-admin')
 
 const app = express()
 const port = process.env.PORT || 8080
 
-// 🔹 Stripe
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
+// 🔹 Stripe secret key
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY)
 
-// 🔹 Firebase
+// 🔹 Firebase Admin
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
@@ -20,49 +21,47 @@ admin.initializeApp({
 
 const db = admin.firestore()
 
-// 🔹 Middlewares
+// 🔹 Middleware
 app.use(cors())
-app.use(express.json()) // pour recevoir JSON normal
+app.use(express.json())
 
-// 🔹 Créer une session Stripe
+// 🔹 Créer une session Stripe Checkout
 app.post('/create-checkout-session', async (req, res) => {
   try {
-    const panier = req.body // on récupère le body directement
-
-    if (!panier || !Array.isArray(panier)) {
-      return res.status(400).json({ error: "Panier invalide" })
+    const items = req.body.items
+    if (!items || !Array.isArray(items)) {
+      return res.status(400).json({ error: 'Panier invalide' })
     }
 
-    const line_items = panier.map((item) => ({
+    const line_items = items.map((item) => ({
       price_data: {
         currency: 'eur',
-        product_data: {
-          name: item.nom,
-        },
-        unit_amount: item.prix * 100,
+        product_data: { name: item.name },
+        unit_amount: item.amount,
       },
-      quantity: item.quantite,
+      quantity: item.quantity,
     }))
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       line_items,
       mode: 'payment',
-      success_url: process.env.SUCCESS_URL,
-      cancel_url: process.env.CANCEL_URL,
+      success_url: process.env.SUCCESS_URL, // ex: 'https://monprojet.vercel.app/success'
+      cancel_url: process.env.CANCEL_URL,   // ex: 'https://monprojet.vercel.app/cancel'
     })
 
-    res.json({ id: session.id })
+    // 🔹 On renvoie l'URL Stripe
+    res.json({ url: session.url })
   } catch (error) {
-    console.error("Erreur création session:", error)
+    console.error('Erreur création session:', error)
     res.status(500).json({ error: error.message })
   }
 })
 
-// 🔹 Webhook Stripe pour enregistrer la commande
+// 🔹 Webhook Stripe pour enregistrer la commande dans Firestore
 app.post(
   '/webhook',
-  express.raw({ type: 'application/json' }), // ⚠️ important pour le webhook
+  express.raw({ type: 'application/json' }), // ⚠️ obligatoire pour Stripe
   async (req, res) => {
     const sig = req.headers['stripe-signature']
     let event
@@ -73,17 +72,14 @@ app.post(
         sig,
         process.env.STRIPE_WEBHOOK_SECRET
       )
+      console.log('✅ Webhook reçu :', event.type)
     } catch (err) {
-      console.error("❌ Webhook signature error:", err.message)
+      console.error('❌ Webhook signature error:', err.message)
       return res.status(400).send(`Webhook Error: ${err.message}`)
     }
 
-    console.log("✅ Webhook reçu :", event.type)
-
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object
-      console.log("Session Stripe du webhook :", session)
-
       try {
         await db.collection('commandes').add({
           stripeSessionId: session.id,
@@ -93,9 +89,9 @@ app.post(
           statut: 'payé',
           date: admin.firestore.FieldValue.serverTimestamp(),
         })
-        console.log("✅ Commande enregistrée dans Firestore")
+        console.log('🔥 Commande enregistrée dans Firestore')
       } catch (err) {
-        console.error("❌ Erreur Firestore :", err)
+        console.error('❌ Erreur Firestore :', err)
       }
     }
 
@@ -103,26 +99,22 @@ app.post(
   }
 )
 
-// 🔹 Test Firestore
+// 🔹 Endpoint test Firestore
 app.get('/test-firestore', async (req, res) => {
   try {
     const docRef = await db.collection('commandes').add({
-      stripeSessionId: "test-session",
-      email: "test@example.com",
+      stripeSessionId: 'test-session',
+      email: 'test@example.com',
       montant: 1000,
-      devise: "eur",
-      statut: "payé",
+      devise: 'eur',
+      statut: 'payé',
       date: admin.firestore.FieldValue.serverTimestamp(),
     })
-
-    console.log("✅ Document Firestore créé :", docRef.id)
     res.send(`Document Firestore créé avec ID : ${docRef.id}`)
   } catch (err) {
-    console.error("❌ Erreur Firestore :", err)
-    res.status(500).send("Erreur Firestore")
+    console.error('❌ Erreur Firestore :', err)
+    res.status(500).send('Erreur Firestore')
   }
 })
 
-app.listen(port, () => {
-  console.log(`🚀 Server démarré sur port ${port}`)
-})
+app.listen(port, () => console.log(`🚀 Server démarré sur port ${port}`))
