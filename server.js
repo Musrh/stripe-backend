@@ -7,9 +7,9 @@ const admin = require('firebase-admin');
 const app = express();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ----------------------------
+// ============================
 // FIREBASE INIT
-// ----------------------------
+// ============================
 admin.initializeApp({
   credential: admin.credential.cert(
     JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
@@ -18,19 +18,18 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-// ----------------------------
-// MIDDLEWARES
-// ----------------------------
+// ============================
+// MIDDLEWARE
+// ============================
 app.use(cors());
 
 // ============================
-// 🚨 WEBHOOK (AVANT express.json())
+// 🚨 WEBHOOK (DOIT ÊTRE AVANT express.json())
 // ============================
 app.post(
   '/webhook',
   express.raw({ type: 'application/json' }),
   async (req, res) => {
-
     const sig = req.headers['stripe-signature'];
     let event;
 
@@ -41,7 +40,7 @@ app.post(
         process.env.STRIPE_WEBHOOK_SECRET
       );
     } catch (err) {
-      console.error("❌ Webhook signature error:", err.message);
+      console.error("❌ Erreur signature webhook :", err.message);
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
@@ -103,11 +102,12 @@ app.post('/create-checkout-session', async (req, res) => {
       line_items,
       metadata: { items: JSON.stringify(items) },
 
-      // ✅ CORRECTION IMPORTANTE
+      // ✅ REDIRECTION GITHUB PAGES
       success_url:
-        'https://monprijet.vercel.app/success?session_id={CHECKOUT_SESSION_ID}',
+        'https://musrh.github.io/monprijet/#/success?session_id={CHECKOUT_SESSION_ID}',
+
       cancel_url:
-        'https://monprijet.vercel.app/cancel',
+        'https://musrh.github.io/monprijet/#/cancel',
     });
 
     console.log("✅ Session créée :", session.id);
@@ -121,7 +121,7 @@ app.post('/create-checkout-session', async (req, res) => {
 });
 
 // ============================
-// 🔹 ROUTE POUR SUCCESS.VUE
+// ROUTE POUR SUCCESS.VUE
 // ============================
 app.get('/api/checkout-session', async (req, res) => {
   try {
@@ -136,4 +136,26 @@ app.get('/api/checkout-session', async (req, res) => {
     );
 
     res.json({
-      customer_email
+      customer_email: session.customer_details?.email,
+      amount_total: session.amount_total,
+      items: session.line_items.data.map(item => ({
+        id: item.id,
+        name: item.description,
+        quantity: item.quantity,
+        amount: item.amount_total,
+      })),
+    });
+
+  } catch (err) {
+    console.error("❌ Erreur récupération session :", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================
+// START SERVER
+// ============================
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () =>
+  console.log(`🚀 Serveur démarré sur port ${PORT}`)
+);
