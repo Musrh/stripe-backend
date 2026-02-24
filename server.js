@@ -8,27 +8,31 @@ const app = express();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // ----------------------------
-// FIREBASE INIT (VERSION STABLE)
+// FIREBASE INIT
 // ----------------------------
 admin.initializeApp({
   credential: admin.credential.cert(
     JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
   ),
 });
-
 const db = admin.firestore();
 
 // ----------------------------
-// MIDDLEWARES
+// CORS pour GitHub Pages
 // ----------------------------
-app.use(cors());
+app.use(cors({
+  origin: "https://musrh.github.io", // frontend GitHub Pages
+  methods: ["GET","POST","PUT","DELETE"],
+  allowedHeaders: ["Content-Type"]
+}));
 
-// 🚨 WEBHOOK AVANT express.json()
+// ----------------------------
+// WEBHOOK Stripe (avant express.json)
+// ----------------------------
 app.post(
   '/webhook',
   express.raw({ type: 'application/json' }),
   async (req, res) => {
-
     const sig = req.headers['stripe-signature'];
     let event;
 
@@ -71,7 +75,9 @@ app.post(
   }
 );
 
-// ✅ JSON parsing pour les autres routes
+// ----------------------------
+// JSON parsing pour les autres routes
+// ----------------------------
 app.use(express.json());
 
 // ----------------------------
@@ -98,8 +104,8 @@ app.post('/create-checkout-session', async (req, res) => {
       payment_method_types: ['card'],
       line_items,
       metadata: { items: JSON.stringify(items) },
-      success_url: 'https://monprijet.vercel.app/success',
-      cancel_url: 'https://monprijet.vercel.app/cancel',
+      success_url: 'https://musrh.github.io/monprijet/#/success?session_id={CHECKOUT_SESSION_ID}',
+      cancel_url: 'https://musrh.github.io/monprijet/#/cancel',
     });
 
     console.log("✅ Session créée :", session.id);
