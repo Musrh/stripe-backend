@@ -8,7 +8,7 @@ const app = express();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // ----------------------------
-// FIREBASE INIT (VERSION STABLE)
+// FIREBASE INIT
 // ----------------------------
 admin.initializeApp({
   credential: admin.credential.cert(
@@ -23,7 +23,9 @@ const db = admin.firestore();
 // ----------------------------
 app.use(cors());
 
-// 🚨 WEBHOOK AVANT express.json()
+// ============================
+// 🚨 WEBHOOK (AVANT express.json())
+// ============================
 app.post(
   '/webhook',
   express.raw({ type: 'application/json' }),
@@ -61,7 +63,7 @@ app.post(
             : []
         });
 
-        console.log("✅ Commande enregistrée dans Firestore");
+        console.log("✅ Commande enregistrée Firestore");
       } catch (err) {
         console.error("❌ Erreur Firestore :", err);
       }
@@ -71,12 +73,14 @@ app.post(
   }
 );
 
-// ✅ JSON parsing pour les autres routes
+// ============================
+// JSON middleware après webhook
+// ============================
 app.use(express.json());
 
-// ----------------------------
+// ============================
 // CREATE CHECKOUT SESSION
-// ----------------------------
+// ============================
 app.post('/create-checkout-session', async (req, res) => {
   try {
     const items = req.body.items || [];
@@ -98,8 +102,12 @@ app.post('/create-checkout-session', async (req, res) => {
       payment_method_types: ['card'],
       line_items,
       metadata: { items: JSON.stringify(items) },
-      success_url: 'https://monprijet.vercel.app/success',
-      cancel_url: 'https://monprijet.vercel.app/cancel',
+
+      // ✅ CORRECTION IMPORTANTE
+      success_url:
+        'https://monprijet.vercel.app/success?session_id={CHECKOUT_SESSION_ID}',
+      cancel_url:
+        'https://monprijet.vercel.app/cancel',
     });
 
     console.log("✅ Session créée :", session.id);
@@ -112,10 +120,20 @@ app.post('/create-checkout-session', async (req, res) => {
   }
 });
 
-// ----------------------------
-// START SERVER
-// ----------------------------
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`🚀 Serveur démarré sur port ${PORT}`)
-);
+// ============================
+// 🔹 ROUTE POUR SUCCESS.VUE
+// ============================
+app.get('/api/checkout-session', async (req, res) => {
+  try {
+    const sessionId = req.query.session_id;
+
+    if (!sessionId)
+      return res.status(400).json({ error: "Session ID manquant" });
+
+    const session = await stripe.checkout.sessions.retrieve(
+      sessionId,
+      { expand: ['line_items'] }
+    );
+
+    res.json({
+      customer_email
