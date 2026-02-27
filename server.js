@@ -104,8 +104,8 @@ app.post('/create-checkout-session', async (req, res) => {
       payment_method_types: ['card'],
       line_items,
       metadata: { items: JSON.stringify(items) },
-      success_url: 'https://musrh.github.io/monprijet/#/success?session_id={CHECKOUT_SESSION_ID}',
-      cancel_url: 'https://musrh.github.io/monprijet/#/cancel',
+      success_url: 'https://musrh.github.io/Monprijet/#/success?session_id={CHECKOUT_SESSION_ID}',
+      cancel_url: 'https://musrh.github.io/Monprijet/#/cancel',
     });
 
     console.log("✅ Session créée :", session.id);
