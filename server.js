@@ -1,3 +1,4 @@
+// server.js
 import express from "express";
 import cors from "cors";
 import Stripe from "stripe";
@@ -7,8 +8,6 @@ import dotenv from "dotenv";
 
 dotenv.config();
 const app = express();
-app.use(cors({ origin: "https://musrh.github.io" }));
-app.use(express.json());
 
 // ----------------------------
 // Firestore
@@ -31,13 +30,69 @@ const paypalEnv =
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
 
 // ----------------------------
-// CREATE STRIPE CHECKOUT SESSION
+// CORS pour GitHub Pages
 // ----------------------------
+app.use(
+  cors({
+    origin: "https://musrh.github.io",
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
+
+// ----------------------------
+// Webhook Stripe (express.raw!)
+app.post(
+  "/webhook",
+  express.raw({ type: "application/json" }), // ⚠️ requis par Stripe
+  async (req, res) => {
+    const sig = req.headers["stripe-signature"];
+    let event;
+
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    } catch (err) {
+      console.error("⚠️ Webhook signature error:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+      try {
+        await db.collection("commandes").add({
+          stripeSessionId: session.id,
+          email: session.customer_details?.email || null,
+          montant: session.amount_total / 100,
+          devise: session.currency,
+          statut: "payé",
+          date: admin.firestore.FieldValue.serverTimestamp(),
+          items: session.metadata?.items ? JSON.parse(session.metadata.items) : [],
+        });
+        console.log("✅ Commande Stripe enregistrée dans Firestore");
+      } catch (err) {
+        console.error("❌ Erreur Firestore Stripe :", err);
+      }
+    }
+
+    res.json({ received: true });
+  }
+);
+
+// ----------------------------
+// Middleware JSON pour les autres routes
+app.use(express.json());
+
+// ----------------------------
+// CREATE STRIPE CHECKOUT SESSION
 app.post("/create-stripe-session", async (req, res) => {
   const items = req.body.items || [];
   try {
-    const line_items = items.map(i => ({
-      price_data: { currency: "eur", product_data: { name: i.nom }, unit_amount: i.prix * 100 },
+    const line_items = items.map((i) => ({
+      price_data: {
+        currency: "eur",
+        product_data: { name: i.nom },
+        unit_amount: i.prix * 100,
+      },
       quantity: i.quantity,
     }));
 
@@ -45,7 +100,7 @@ app.post("/create-stripe-session", async (req, res) => {
       payment_method_types: ["card"],
       line_items,
       mode: "payment",
-      metadata: { items: JSON.stringify(items), email: req.body.email },
+      metadata: { items: JSON.stringify(items) },
       success_url: "https://musrh.github.io/Monprijet/#/success",
       cancel_url: "https://musrh.github.io/Monprijet/#/cancel",
     });
@@ -58,50 +113,19 @@ app.post("/create-stripe-session", async (req, res) => {
 });
 
 // ----------------------------
-// STRIPE WEBHOOK pour enregistrer la commande
-// ----------------------------
-app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-  let event;
-
-  try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err) {
-    console.error("Webhook signature error:", err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object;
-    try {
-      await db.collection('commandes').add({
-        stripeSessionId: session.id,
-        email: session.customer_details?.email || session.metadata?.email,
-        montant: session.amount_total / 100,
-        devise: session.currency,
-        statut: 'payé',
-        date: admin.firestore.FieldValue.serverTimestamp(),
-        items: session.metadata?.items ? JSON.parse(session.metadata.items) : []
-      });
-      console.log("✅ Commande Stripe enregistrée");
-    } catch (err) {
-      console.error("Erreur Firestore Stripe :", err);
-    }
-  }
-
-  res.json({ received: true });
-});
-
-// ----------------------------
 // CREATE PAYPAL ORDER
-// ----------------------------
 app.post("/create-paypal-order", async (req, res) => {
   const items = req.body.items || [];
   const total = items.reduce((sum, i) => sum + i.prix * i.quantity, 0).toFixed(2);
 
+  console.log("Commande PayPal:", items);
+
   const request = new paypal.orders.OrdersCreateRequest();
   request.prefer("return=representation");
-  request.requestBody({ intent: "CAPTURE", purchase_units: [{ amount: { currency_code: "EUR", value: total } }] });
+  request.requestBody({
+    intent: "CAPTURE",
+    purchase_units: [{ amount: { currency_code: "EUR", value: total } }],
+  });
 
   try {
     const order = await paypalClient.execute(request);
@@ -114,7 +138,6 @@ app.post("/create-paypal-order", async (req, res) => {
 
 // ----------------------------
 // CAPTURE PAYPAL ORDER
-// ----------------------------
 app.post("/capture-paypal-order", async (req, res) => {
   const { orderId, user, items } = req.body;
   try {
@@ -133,6 +156,7 @@ app.post("/capture-paypal-order", async (req, res) => {
     });
 
     res.json({ capture });
+    console.log("✅ Commande PayPal enregistrée dans Firestore");
   } catch (err) {
     console.error("Capture PayPal error:", err);
     res.status(500).json({ error: err.message });
@@ -141,6 +165,5 @@ app.post("/capture-paypal-order", async (req, res) => {
 
 // ----------------------------
 // START SERVER
-// ----------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Backend payments running on port ${PORT}`));
