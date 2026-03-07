@@ -19,7 +19,6 @@ const db = admin.firestore();
 
 // ----------------------------
 // Stripe
-// ----------------------------
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // ----------------------------
@@ -38,11 +37,7 @@ app.post("/create-stripe-session", async (req, res) => {
   const items = req.body.items || [];
   try {
     const line_items = items.map(i => ({
-      price_data: {
-        currency: "eur",
-        product_data: { name: i.nom },
-        unit_amount: i.prix * 100,
-      },
+      price_data: { currency: "eur", product_data: { name: i.nom }, unit_amount: i.prix * 100 },
       quantity: i.quantity,
     }));
 
@@ -50,7 +45,7 @@ app.post("/create-stripe-session", async (req, res) => {
       payment_method_types: ["card"],
       line_items,
       mode: "payment",
-      metadata: { items: JSON.stringify(items) },
+      metadata: { items: JSON.stringify(items), email: req.body.email },
       success_url: "https://musrh.github.io/Monprijet/#/success",
       cancel_url: "https://musrh.github.io/Monprijet/#/cancel",
     });
@@ -63,6 +58,41 @@ app.post("/create-stripe-session", async (req, res) => {
 });
 
 // ----------------------------
+// STRIPE WEBHOOK pour enregistrer la commande
+// ----------------------------
+app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error("Webhook signature error:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    try {
+      await db.collection('commandes').add({
+        stripeSessionId: session.id,
+        email: session.customer_details?.email || session.metadata?.email,
+        montant: session.amount_total / 100,
+        devise: session.currency,
+        statut: 'payé',
+        date: admin.firestore.FieldValue.serverTimestamp(),
+        items: session.metadata?.items ? JSON.parse(session.metadata.items) : []
+      });
+      console.log("✅ Commande Stripe enregistrée");
+    } catch (err) {
+      console.error("Erreur Firestore Stripe :", err);
+    }
+  }
+
+  res.json({ received: true });
+});
+
+// ----------------------------
 // CREATE PAYPAL ORDER
 // ----------------------------
 app.post("/create-paypal-order", async (req, res) => {
@@ -71,19 +101,13 @@ app.post("/create-paypal-order", async (req, res) => {
 
   const request = new paypal.orders.OrdersCreateRequest();
   request.prefer("return=representation");
-  request.requestBody({
-    intent: "CAPTURE",
-    purchase_units: [
-      { amount: { currency_code: "EUR", value: total } }
-    ],
-  });
+  request.requestBody({ intent: "CAPTURE", purchase_units: [{ amount: { currency_code: "EUR", value: total } }] });
 
   try {
     const order = await paypalClient.execute(request);
-    console.log("✅ PayPal Order created:", order.result.id);
-    res.json({ id: order.result.id }); // ← renvoyer l’order id correct
+    res.json({ id: order.result.id });
   } catch (err) {
-    console.error("PayPal error:", err);
+    console.error("PayPal create order error:", err);
     res.status(500).json({ error: err.message });
   }
 });
