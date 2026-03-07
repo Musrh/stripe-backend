@@ -1,3 +1,4 @@
+// backend/index.js
 import express from "express";
 import cors from "cors";
 import Stripe from "stripe";
@@ -7,6 +8,10 @@ import dotenv from "dotenv";
 
 dotenv.config();
 const app = express();
+
+// ----------------------------
+// CORS pour ton frontend GitHub Pages
+// ----------------------------
 app.use(cors({ origin: "https://musrh.github.io" }));
 app.use(express.json());
 
@@ -36,9 +41,16 @@ const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
 // ----------------------------
 app.post("/create-stripe-session", async (req, res) => {
   const items = req.body.items || [];
+
+  if (!items.length) return res.status(400).json({ error: "Panier vide" });
+
   try {
     const line_items = items.map(i => ({
-      price_data: { currency: "eur", product_data: { name: i.nom }, unit_amount: i.prix * 100 },
+      price_data: {
+        currency: "eur",
+        product_data: { name: i.nom },
+        unit_amount: i.prix * 100,
+      },
       quantity: i.quantity,
     }));
 
@@ -63,17 +75,23 @@ app.post("/create-stripe-session", async (req, res) => {
 // ----------------------------
 app.post("/create-paypal-order", async (req, res) => {
   const items = req.body.items || [];
+  if (!items.length) return res.status(400).json({ error: "Panier vide" });
+
   const total = items.reduce((sum, i) => sum + i.prix * i.quantity, 0).toFixed(2);
 
   const request = new paypal.orders.OrdersCreateRequest();
   request.prefer("return=representation");
-  request.requestBody({ intent: "CAPTURE", purchase_units: [{ amount: { currency_code: "EUR", value: total } }] });
+  request.requestBody({
+    intent: "CAPTURE",
+    purchase_units: [{ amount: { currency_code: "EUR", value: total } }],
+  });
 
   try {
     const order = await paypalClient.execute(request);
+    // On renvoie l'id de la commande pour le frontend
     res.json({ id: order.result.id });
   } catch (err) {
-    console.error("PayPal error:", err);
+    console.error("PayPal create order error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -83,6 +101,8 @@ app.post("/create-paypal-order", async (req, res) => {
 // ----------------------------
 app.post("/capture-paypal-order", async (req, res) => {
   const { orderId, user, items } = req.body;
+  if (!orderId || !user) return res.status(400).json({ error: "Missing orderId or user info" });
+
   try {
     const request = new paypal.orders.OrdersCaptureRequest(orderId);
     request.requestBody({});
@@ -100,7 +120,7 @@ app.post("/capture-paypal-order", async (req, res) => {
 
     res.json({ capture });
   } catch (err) {
-    console.error("Capture PayPal error:", err);
+    console.error("PayPal capture error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -109,4 +129,4 @@ app.post("/capture-paypal-order", async (req, res) => {
 // START SERVER
 // ----------------------------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Backend payments running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Backend Stripe + PayPal running on port ${PORT}`));
