@@ -32,13 +32,17 @@ const paypalEnv =
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
 
 // ----------------------------
-// CREATE STRIPE SESSION
+// CREATE STRIPE CHECKOUT SESSION
 // ----------------------------
 app.post("/create-stripe-session", async (req, res) => {
   const items = req.body.items || [];
   try {
     const line_items = items.map(i => ({
-      price_data: { currency: "eur", product_data: { name: i.nom }, unit_amount: i.prix * 100 },
+      price_data: {
+        currency: "eur",
+        product_data: { name: i.nom },
+        unit_amount: i.prix * 100,
+      },
       quantity: i.quantity,
     }));
 
@@ -69,15 +73,17 @@ app.post("/create-paypal-order", async (req, res) => {
   request.prefer("return=representation");
   request.requestBody({
     intent: "CAPTURE",
-    purchase_units: [{ amount: { currency_code: "EUR", value: total } }],
+    purchase_units: [
+      { amount: { currency_code: "EUR", value: total } }
+    ],
   });
 
   try {
     const order = await paypalClient.execute(request);
-    console.log("Commande PayPal créée:", order.result);
-    res.json({ id: order.result.id }); // <-- IMPORTANT: {id: "..."}
+    console.log("✅ PayPal Order created:", order.result.id);
+    res.json({ id: order.result.id }); // ← renvoyer l’order id correct
   } catch (err) {
-    console.error("PayPal create order error:", err);
+    console.error("PayPal error:", err);
     res.status(500).json({ error: err.message });
   }
 });
