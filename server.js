@@ -30,21 +30,20 @@ const paypalEnv =
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
 
 // ----------------------------
-// CORS pour GitHub Pages
-// ----------------------------
+// CORS pour GitHub Pages / site public
 app.use(
   cors({
-    origin: "https://musrh.github.io",
+    origin: "https://wellshoppings.com", // ton domaine public
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type"],
   })
 );
 
 // ----------------------------
-// Webhook Stripe (express.raw!)
+// Webhook Stripe
 app.post(
   "/webhook",
-  express.raw({ type: "application/json" }), // ⚠️ requis par Stripe
+  express.raw({ type: "application/json" }),
   async (req, res) => {
     const sig = req.headers["stripe-signature"];
     let event;
@@ -101,8 +100,8 @@ app.post("/create-stripe-session", async (req, res) => {
       line_items,
       mode: "payment",
       metadata: { items: JSON.stringify(items) },
-      success_url: "https://musrh.github.io/Monprijet/#/success",
-      cancel_url: "https://musrh.github.io/Monprijet/#/cancel",
+      success_url: "https://wellshoppings.com/#/success",
+      cancel_url: "https://wellshoppings.com/#/cancel",
     });
 
     res.json({ url: session.url });
@@ -117,8 +116,6 @@ app.post("/create-stripe-session", async (req, res) => {
 app.post("/create-paypal-order", async (req, res) => {
   const items = req.body.items || [];
   const total = items.reduce((sum, i) => sum + i.prix * i.quantity, 0).toFixed(2);
-
-  console.log("Commande PayPal:", items);
 
   const request = new paypal.orders.OrdersCreateRequest();
   request.prefer("return=representation");
