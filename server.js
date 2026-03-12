@@ -21,13 +21,10 @@ app.use(helmet());
 // Middlewares
 app.use(express.json());
 
-// ⚠️ CORS pour front + Railway Healthcheck
+// ⚠️ CORS pour ton front uniquement
 app.use(
   cors({
-    origin: [
-      "https://wellshoppings.com",          // ton front
-      "https://healthcheck.railway.app"     // Railway healthcheck
-    ],
+    origin: "https://wellshoppings.com", // ton front
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type"],
   })
@@ -40,15 +37,8 @@ admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
 // ----------------------------
-// Healthcheck rapide
-app.get("/health", (req, res) => {
-  console.log("✅ Healthcheck pinged at", new Date().toISOString());
-  res.status(200).json({ status: "ok" });
-});
-
-// ----------------------------
-// Racine friendly pour navigateur
-app.get("/", (req, res) => res.send("✅ Stripe & PayPal backend is running"));
+// Racine simple pour navigateur
+app.get("/", (req, res) => res.send("Stripe & PayPal backend is running 🚀"));
 
 // ----------------------------
 // Import produits FakeStoreAPI
@@ -164,5 +154,5 @@ app.post("/capture-paypal-order", async (req, res) => {
 });
 
 // ----------------------------
-// Start server avec PORT Railway
+// Start server
 app.listen(PORT, () => console.log(`🚀 Backend payments running on port ${PORT}`));
