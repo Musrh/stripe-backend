@@ -4,92 +4,91 @@ import cors from "cors";
 import Stripe from "stripe";
 import admin from "firebase-admin";
 import paypal from "@paypal/checkout-server-sdk";
+import axios from "axios";
 import dotenv from "dotenv";
+import helmet from "helmet";
 
 dotenv.config();
+
 const app = express();
+const PORT = process.env.PORT || 3000;
 
 // ----------------------------
-// Firestore
-// ----------------------------
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-const db = admin.firestore();
+// Security headers
+app.use(helmet());
 
 // ----------------------------
-// Stripe
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+// Middlewares
+app.use(express.json());
 
-// ----------------------------
-// PayPal
-const paypalEnv =
-  process.env.PAYPAL_ENV === "live"
-    ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET)
-    : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET);
-
-const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
-
-// ----------------------------
-// CORS pour GitHub Pages / site public
+// ⚠️ CORS pour front + Railway Healthcheck
 app.use(
   cors({
-    origin: "https://wellshoppings.com", // ton domaine public
-    methods: ["GET", "POST", "PUT", "DELETE"],
+    origin: [
+      "https://wellshoppings.com",          // ton front
+      "https://healthcheck.railway.app"     // Railway healthcheck
+    ],
+    methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type"],
   })
 );
 
 // ----------------------------
-// Webhook Stripe
-app.post(
-  "/webhook",
-  express.raw({ type: "application/json" }),
-  async (req, res) => {
-    const sig = req.headers["stripe-signature"];
-    let event;
+// Firebase
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+const db = admin.firestore();
 
-    try {
-      event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-    } catch (err) {
-      console.error("⚠️ Webhook signature error:", err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
+// ----------------------------
+// Healthcheck rapide
+app.get("/health", (req, res) => {
+  console.log("✅ Healthcheck pinged at", new Date().toISOString());
+  res.status(200).json({ status: "ok" });
+});
 
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-      try {
-        await db.collection("commandes").add({
-          stripeSessionId: session.id,
-          email: session.customer_details?.email || null,
-          montant: session.amount_total / 100,
-          devise: session.currency,
-          statut: "payé",
-          date: admin.firestore.FieldValue.serverTimestamp(),
-          items: session.metadata?.items ? JSON.parse(session.metadata.items) : [],
-        });
-        console.log("✅ Commande Stripe enregistrée dans Firestore");
-      } catch (err) {
-        console.error("❌ Erreur Firestore Stripe :", err);
-      }
-    }
+// ----------------------------
+// Racine friendly pour navigateur
+app.get("/", (req, res) => res.send("✅ Stripe & PayPal backend is running"));
 
-    res.json({ received: true });
+// ----------------------------
+// Import produits FakeStoreAPI
+app.get("/import-products", async (req, res) => {
+  try {
+    const response = await axios.get("https://fakestoreapi.com/products");
+    const products = response.data;
+
+    const batch = db.batch();
+    products.forEach((item) => {
+      const ref = db.collection("ProductsExternes").doc(item.id.toString());
+      batch.set(ref, {
+        nom: item.title,
+        prix: item.price,
+        description: item.description,
+        categorie: item.category,
+        image: item.image,
+        source: "FakeStoreAPI",
+      });
+    });
+
+    await batch.commit();
+    res.send({ status: "ok", message: products.length + " produits importés" });
+  } catch (err) {
+    res.status(500).send({ status: "error", message: err.message });
   }
-);
+});
 
 // ----------------------------
-// Middleware JSON pour les autres routes
-app.use(express.json());
-
-// ----------------------------
-// CREATE STRIPE CHECKOUT SESSION
+// Stripe lazy init
+let stripe;
 app.post("/create-stripe-session", async (req, res) => {
+  if (!stripe) stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
   const items = req.body.items || [];
   try {
     const line_items = items.map((i) => ({
       price_data: {
         currency: "eur",
-        product_data: { name: i.nom },
+        product_data: { name: i.nom, images: [i.image || "/placeholder.png"] },
         unit_amount: i.prix * 100,
       },
       quantity: i.quantity,
@@ -112,17 +111,23 @@ app.post("/create-stripe-session", async (req, res) => {
 });
 
 // ----------------------------
-// CREATE PAYPAL ORDER
+// PayPal lazy init
+let paypalClient;
 app.post("/create-paypal-order", async (req, res) => {
+  if (!paypalClient) {
+    const env =
+      process.env.PAYPAL_ENV === "live"
+        ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET)
+        : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET);
+    paypalClient = new paypal.core.PayPalHttpClient(env);
+  }
+
   const items = req.body.items || [];
   const total = items.reduce((sum, i) => sum + i.prix * i.quantity, 0).toFixed(2);
 
   const request = new paypal.orders.OrdersCreateRequest();
   request.prefer("return=representation");
-  request.requestBody({
-    intent: "CAPTURE",
-    purchase_units: [{ amount: { currency_code: "EUR", value: total } }],
-  });
+  request.requestBody({ intent: "CAPTURE", purchase_units: [{ amount: { currency_code: "EUR", value: total } }] });
 
   try {
     const order = await paypalClient.execute(request);
@@ -133,8 +138,6 @@ app.post("/create-paypal-order", async (req, res) => {
   }
 });
 
-// ----------------------------
-// CAPTURE PAYPAL ORDER
 app.post("/capture-paypal-order", async (req, res) => {
   const { orderId, user, items } = req.body;
   try {
@@ -161,6 +164,5 @@ app.post("/capture-paypal-order", async (req, res) => {
 });
 
 // ----------------------------
-// START SERVER
-const PORT = process.env.PORT || 3000;
+// Start server avec PORT Railway
 app.listen(PORT, () => console.log(`🚀 Backend payments running on port ${PORT}`));
