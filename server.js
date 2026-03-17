@@ -1,159 +1,136 @@
-// server.js
+//server.js avec variantes  bon
+// server.js pour Printful complet et sécurisé
 import express from "express";
 import cors from "cors";
-import Stripe from "stripe";
 import admin from "firebase-admin";
-import paypal from "@paypal/checkout-server-sdk";
+import axios from "axios";
 import dotenv from "dotenv";
-import helmet from "helmet";
 
 dotenv.config();
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ----------------------------
-// Sécurité et middlewares
-app.use(helmet());
+app.use(cors());
 app.use(express.json());
-app.use(cors({ origin: ["https://wellshoppings.com"], methods: ["GET","POST"] }));
 
-// ----------------------------
-// Firebase
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-const db = admin.firestore();
+// 🔹 Firebase
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_Printful);
 
-// ----------------------------
-// Stripe
-let stripe;
-app.post("/create-stripe-session", async (req, res) => {
-  if (!stripe) stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-  const { items, email, adresseLivraison } = req.body;
+const firebaseApp = admin.initializeApp(
+  { credential: admin.credential.cert(serviceAccount) },
+  "printfulApp"
+);
 
+const db = firebaseApp.firestore();
+
+// 🔹 Test serveur
+app.get("/", (req, res) => {
+  res.send("Printful backend running 🚀");
+});
+
+// 🔹 IMPORT PRODUITS PRINTFUL + STOCKAGE FIRESTORE
+app.get("/printful/import-products", async (req, res) => {
   try {
-    const line_items = items.map(i => ({
-      price_data: {
-        currency: "eur",
-        product_data: { name: i.nom, images: [i.image || "/placeholder.png"] },
-        unit_amount: i.prix * 100,
-      },
-      quantity: i.quantity,
+    const PRINTFUL_API_KEY = process.env.PRINTFUL_API_KEY;
+
+    // 1️⃣ Récupérer la liste des produits
+    const response = await axios.get("https://api.printful.com/store/products", {
+      headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
+    });
+
+    const products = response.data.result || [];
+    const batch = db.batch();
+
+    // 2️⃣ Récupérer les détails de chaque produit
+    for (const item of products) {
+      const details = await axios.get(
+        `https://api.printful.com/store/products/${item.id}`,
+        {
+          headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
+        }
+      );
+
+      const product = details.data.result;
+
+      // 🔹 Créer les variantes avec fallback sécurisé
+      const variants = (product.sync_variants || []).map((v) => {
+        const options = v.options || v.product?.options || [];
+
+        const color =
+          options.find((o) => o?.name?.toLowerCase().includes("color"))?.value ||
+          "N/A";
+
+        const size =
+          options.find((o) => o?.name?.toLowerCase().includes("size"))?.value ||
+          "N/A";
+
+        // 🔹 mockup avec design
+        const thumbnail =
+          v.files?.find((f) => f.type === "preview")?.preview_url ||
+          v.files?.[0]?.preview_url ||
+          product.sync_product?.thumbnail_url ||
+          null;
+
+        return {
+          id: v.id,
+          color,
+          size,
+          price: v.retail_price ? parseFloat(v.retail_price) : 0,
+          thumbnail,
+        };
+      });
+
+      // 🔹 prix global (prix de la première variante)
+      const price = variants[0]?.price || 0;
+
+      // 🔹 description
+      const description = product.sync_product?.description || "Description non disponible";
+
+      const productData = {
+        id: item.id,
+        name: item.name,
+        description,
+        price,
+        thumbnail: variants[0]?.thumbnail || null,
+        variants,
+        source: "Printful",
+        syncDate: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      const ref = db.collection("PrintfulProducts").doc(item.id.toString());
+      batch.set(ref, productData);
+    }
+
+    await batch.commit();
+
+    res.json({
+      status: "ok",
+      message: `${products.length} produits importés`,
+    });
+  } catch (err) {
+    console.error("Erreur import Printful:", err.message);
+    res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// 🔹 API PRODUITS POUR LE FRONTEND
+app.get("/printful/products", async (req, res) => {
+  try {
+    const snapshot = await db.collection("PrintfulProducts").get();
+    const products = snapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
     }));
 
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      line_items,
-      mode: "payment",
-      metadata: { items: JSON.stringify(items), email, adresseLivraison },
-      success_url: "https://wellshoppings.com/#/success",
-      cancel_url: "https://wellshoppings.com/#/cancel",
-    });
-
-    res.json({ url: session.url });
+    res.json({ products });
   } catch (err) {
-    console.error("Stripe error:", err);
-    res.status(500).json({ error: err.message });
+    console.error("Erreur récupération produits:", err.message);
+    res.status(500).json({ products: [] });
   }
 });
 
-// Stripe webhook pour enregistrer commande
-app.post("/stripe-webhook", express.raw({ type: "application/json" }), async (req, res) => {
-  const sig = req.headers["stripe-signature"];
-  let event;
-
-  try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err) {
-    console.error("Webhook signature error:", err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-    const items = JSON.parse(session.metadata.items || "[]");
-    const email = session.metadata.email || "";
-    const adresseLivraison = session.metadata.adresseLivraison || "";
-
-    try {
-      await db.collection("commandes").add({
-        stripeSessionId: session.id,
-        email,
-        items,
-        adresseLivraison,
-        montant: session.amount_total / 100,
-        devise: session.currency.toUpperCase(),
-        statut: "payé",
-        date: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      console.log("✅ Commande Stripe enregistrée dans Firestore");
-    } catch (err) {
-      console.error("Erreur enregistrement Stripe:", err.message);
-    }
-  }
-
-  res.json({ received: true });
+// 🔹 Lancer serveur
+app.listen(PORT, () => {
+  console.log(`🚀 Printful backend running on port ${PORT}`);
 });
-
-// ----------------------------
-// PayPal
-let paypalClient;
-app.post("/create-paypal-order", async (req, res) => {
-  if (!paypalClient) {
-    const env = process.env.PAYPAL_ENV === "live"
-      ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET)
-      : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET);
-    paypalClient = new paypal.core.PayPalHttpClient(env);
-  }
-
-  const { items } = req.body;
-  const total = items.reduce((sum, i) => sum + i.prix * i.quantity, 0).toFixed(2);
-
-  const request = new paypal.orders.OrdersCreateRequest();
-  request.prefer("return=representation");
-  request.requestBody({
-    intent: "CAPTURE",
-    purchase_units: [{ amount: { currency_code: "EUR", value: total } }],
-  });
-
-  try {
-    const order = await paypalClient.execute(request);
-    res.json({ id: order.result.id });
-  } catch (err) {
-    console.error("PayPal create order error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/capture-paypal-order", async (req, res) => {
-  const { orderId, user, items, adresseLivraison } = req.body;
-  if (!user?.email || !adresseLivraison) return res.status(400).json({ error: "Informations manquantes" });
-
-  try {
-    const request = new paypal.orders.OrdersCaptureRequest(orderId);
-    request.requestBody({});
-    const capture = await paypalClient.execute(request);
-
-    const montant = capture.result.purchase_units[0].payments.captures[0].amount.value;
-    const devise = capture.result.purchase_units[0].payments.captures[0].amount.currency_code;
-
-    await db.collection("commandes").add({
-      paypalOrderId: orderId,
-      email: user.email,
-      montant,
-      devise,
-      statut: "payé",
-      date: admin.firestore.FieldValue.serverTimestamp(),
-      items,
-      adresseLivraison
-    });
-
-    res.json({ capture, message: "Commande PayPal enregistrée ✅" });
-  } catch (err) {
-    console.error("Capture PayPal error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ----------------------------
-// Démarrage serveur
-app.listen(PORT, () => console.log(`🚀 Backend central Stripe+PayPal running on port ${PORT}`));
