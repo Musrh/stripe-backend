@@ -4,31 +4,18 @@ import cors from "cors";
 import Stripe from "stripe";
 import admin from "firebase-admin";
 import paypal from "@paypal/checkout-server-sdk";
-import axios from "axios";
 import dotenv from "dotenv";
 import helmet from "helmet";
 
 dotenv.config();
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ----------------------------
-// Security headers
+// Sécurité et middlewares
 app.use(helmet());
-
-// ----------------------------
-// Middlewares
 app.use(express.json());
-
-// ⚠️ CORS pour front uniquement
-app.use(
-  cors({
-    origin: ["https://wellshoppings.com"],
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type"],
-  })
-);
+app.use(cors({ origin: ["https://wellshoppings.com"], methods: ["GET","POST"] }));
 
 // ----------------------------
 // Firebase
@@ -37,45 +24,14 @@ admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
 // ----------------------------
-// Racine simple pour navigateur
-app.get("/", (req, res) => res.send("Stripe & PayPal backend is running 🚀"));
-
-// ----------------------------
-// Import produits FakeStoreAPI
-app.get("/import-products", async (req, res) => {
-  try {
-    const response = await axios.get("https://fakestoreapi.com/products");
-    const products = response.data;
-
-    const batch = db.batch();
-    products.forEach((item) => {
-      const ref = db.collection("ProductsExternes").doc(item.id.toString());
-      batch.set(ref, {
-        nom: item.title,
-        prix: item.price,
-        description: item.description,
-        categorie: item.category,
-        image: item.image,
-        source: "FakeStoreAPI",
-      });
-    });
-
-    await batch.commit();
-    res.send({ status: "ok", message: products.length + " produits importés" });
-  } catch (err) {
-    res.status(500).send({ status: "error", message: err.message });
-  }
-});
-
-// ----------------------------
-// Stripe lazy init
+// Stripe
 let stripe;
 app.post("/create-stripe-session", async (req, res) => {
   if (!stripe) stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+  const { items, email, adresseLivraison } = req.body;
 
-  const items = req.body.items || [];
   try {
-    const line_items = items.map((i) => ({
+    const line_items = items.map(i => ({
       price_data: {
         currency: "eur",
         product_data: { name: i.nom, images: [i.image || "/placeholder.png"] },
@@ -88,7 +44,7 @@ app.post("/create-stripe-session", async (req, res) => {
       payment_method_types: ["card"],
       line_items,
       mode: "payment",
-      metadata: { items: JSON.stringify(items) },
+      metadata: { items: JSON.stringify(items), email, adresseLivraison },
       success_url: "https://wellshoppings.com/#/success",
       cancel_url: "https://wellshoppings.com/#/cancel",
     });
@@ -100,19 +56,56 @@ app.post("/create-stripe-session", async (req, res) => {
   }
 });
 
+// Stripe webhook pour enregistrer commande
+app.post("/stripe-webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  const sig = req.headers["stripe-signature"];
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error("Webhook signature error:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    const items = JSON.parse(session.metadata.items || "[]");
+    const email = session.metadata.email || "";
+    const adresseLivraison = session.metadata.adresseLivraison || "";
+
+    try {
+      await db.collection("commandes").add({
+        stripeSessionId: session.id,
+        email,
+        items,
+        adresseLivraison,
+        montant: session.amount_total / 100,
+        devise: session.currency.toUpperCase(),
+        statut: "payé",
+        date: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.log("✅ Commande Stripe enregistrée dans Firestore");
+    } catch (err) {
+      console.error("Erreur enregistrement Stripe:", err.message);
+    }
+  }
+
+  res.json({ received: true });
+});
+
 // ----------------------------
-// PayPal lazy init
+// PayPal
 let paypalClient;
 app.post("/create-paypal-order", async (req, res) => {
   if (!paypalClient) {
-    const env =
-      process.env.PAYPAL_ENV === "live"
-        ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET)
-        : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET);
+    const env = process.env.PAYPAL_ENV === "live"
+      ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET)
+      : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET);
     paypalClient = new paypal.core.PayPalHttpClient(env);
   }
 
-  const items = req.body.items || [];
+  const { items } = req.body;
   const total = items.reduce((sum, i) => sum + i.prix * i.quantity, 0).toFixed(2);
 
   const request = new paypal.orders.OrdersCreateRequest();
@@ -132,24 +125,29 @@ app.post("/create-paypal-order", async (req, res) => {
 });
 
 app.post("/capture-paypal-order", async (req, res) => {
-  const { orderId, user, items } = req.body;
+  const { orderId, user, items, adresseLivraison } = req.body;
+  if (!user?.email || !adresseLivraison) return res.status(400).json({ error: "Informations manquantes" });
+
   try {
     const request = new paypal.orders.OrdersCaptureRequest(orderId);
     request.requestBody({});
     const capture = await paypalClient.execute(request);
 
+    const montant = capture.result.purchase_units[0].payments.captures[0].amount.value;
+    const devise = capture.result.purchase_units[0].payments.captures[0].amount.currency_code;
+
     await db.collection("commandes").add({
       paypalOrderId: orderId,
       email: user.email,
-      montant: capture.result.purchase_units[0].payments.captures[0].amount.value,
-      devise: capture.result.purchase_units[0].payments.captures[0].amount.currency_code,
+      montant,
+      devise,
       statut: "payé",
       date: admin.firestore.FieldValue.serverTimestamp(),
       items,
+      adresseLivraison
     });
 
-    res.json({ capture });
-    console.log("✅ Commande PayPal enregistrée dans Firestore");
+    res.json({ capture, message: "Commande PayPal enregistrée ✅" });
   } catch (err) {
     console.error("Capture PayPal error:", err);
     res.status(500).json({ error: err.message });
@@ -157,5 +155,5 @@ app.post("/capture-paypal-order", async (req, res) => {
 });
 
 // ----------------------------
-// Start server
-app.listen(PORT, () => console.log(`🚀 Backend payments running on port ${PORT}`));
+// Démarrage serveur
+app.listen(PORT, () => console.log(`🚀 Backend central Stripe+PayPal running on port ${PORT}`));
