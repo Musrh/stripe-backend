@@ -9,9 +9,9 @@ import dotenv from "dotenv";
 dotenv.config();
 const app = express();
 
-// ----------------------------
-// 🔥 FIREBASE
-// ----------------------------
+/* ================================
+   🔥 FIREBASE
+================================ */
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
 admin.initializeApp({
@@ -20,14 +20,14 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-// ----------------------------
-// 💳 STRIPE
-// ----------------------------
+/* ================================
+   💳 STRIPE
+================================ */
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ----------------------------
-// 🅿️ PAYPAL
-// ----------------------------
+/* ================================
+   🅿️ PAYPAL
+================================ */
 const paypalEnv =
   process.env.PAYPAL_ENV === "live"
     ? new paypal.core.LiveEnvironment(
@@ -41,9 +41,9 @@ const paypalEnv =
 
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
 
-// ----------------------------
-// 🌍 CORS
-// ----------------------------
+/* ================================
+   🌍 CORS
+================================ */
 app.use(
   cors({
     origin: "https://wellshoppings.com",
@@ -52,12 +52,13 @@ app.use(
   })
 );
 
-// ----------------------------
-// 🔹 Fonction envoi vers Printful Service
-// ----------------------------
+/* ================================
+   🔹 Fonction appel Printful Service
+================================ */
 async function sendOrderToPrintful(order) {
   try {
-    console.log("📤 Envoi vers Printful :", order);
+    console.log("📤 Envoi vers Printful Service...");
+    console.log(order);
 
     const response = await fetch(
       "https://printfulpasscommandes-production.up.railway.app/create-order",
@@ -66,7 +67,7 @@ async function sendOrderToPrintful(order) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ order }),
+        body: JSON.stringify({ order }), // IMPORTANT
       }
     );
 
@@ -86,9 +87,9 @@ async function sendOrderToPrintful(order) {
   }
 }
 
-// ----------------------------
-// 🔔 STRIPE WEBHOOK
-// ----------------------------
+/* ================================
+   🔔 STRIPE WEBHOOK
+================================ */
 app.post(
   "/webhook",
   express.raw({ type: "application/json" }),
@@ -104,7 +105,7 @@ app.post(
       );
     } catch (err) {
       console.error("⚠️ Webhook signature error:", err.message);
-      return res.status(400).send(`Webhook Error`);
+      return res.status(400).send("Webhook error");
     }
 
     if (event.type === "checkout.session.completed") {
@@ -118,7 +119,7 @@ app.post(
         nomClient: session.customer_details?.name || "Client",
         adresse: session.customer_details?.address?.line1 || "",
         ville: session.customer_details?.address?.city || "",
-        pays: session.customer_details?.address?.country || "",
+        pays: session.customer_details?.address?.country || "FR",
         codePostal: session.customer_details?.address?.postal_code || "",
         items,
       };
@@ -137,21 +138,21 @@ app.post(
         items,
       });
 
-      console.log("✅ Commande Stripe enregistrée + envoyée à Printful");
+      console.log("✅ Stripe enregistré + envoyé à Printful");
     }
 
     res.json({ received: true });
   }
 );
 
-// ----------------------------
-// JSON middleware
-// ----------------------------
+/* ================================
+   JSON middleware
+================================ */
 app.use(express.json());
 
-// ----------------------------
-// 🅿️ CAPTURE PAYPAL
-// ----------------------------
+/* ================================
+   🅿️ CAPTURE PAYPAL
+================================ */
 app.post("/capture-paypal-order", async (req, res) => {
   const { orderId, user, items, adresseLivraison } = req.body;
 
@@ -194,7 +195,9 @@ app.post("/capture-paypal-order", async (req, res) => {
   }
 });
 
-// ----------------------------
+/* ================================
+   🚀 START SERVER
+================================ */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () =>
   console.log(`🚀 Backend payments running on port ${PORT}`)
