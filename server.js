@@ -59,7 +59,7 @@ app.post("/capture-paypal-order", async (req, res) => {
   request.requestBody({});
   const capture = await paypalClient.execute(request);
 
-  // Sauvegarde dans Firestore
+  // Sauvegarde Firestore
   await db.collection("orders").add({
     user: user.email,
     items,
