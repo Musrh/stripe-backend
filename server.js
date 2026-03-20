@@ -9,9 +9,9 @@ dotenv.config();
 const app = express();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// =============================
+// ----------------------------
 // 🔥 FIREBASE
-// =============================
+// ----------------------------
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
 admin.initializeApp({
@@ -20,9 +20,9 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-// =============================
+// ----------------------------
 // 🌍 CORS
-// =============================
+// ----------------------------
 app.use(
   cors({
     origin: "https://wellshoppings.com",
@@ -30,9 +30,9 @@ app.use(
   })
 );
 
-// ======================================================
-// 🚨 STRIPE WEBHOOK (DOIT ÊTRE AVANT express.json())
-// ======================================================
+// ===================================================
+// 🚨 WEBHOOK STRIPE (DOIT ÊTRE AVANT express.json())
+// ===================================================
 app.post(
   "/webhook",
   express.raw({ type: "application/json" }),
@@ -56,6 +56,8 @@ app.post(
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
 
+      console.log("📦 Metadata reçu :", session.metadata);
+
       const items = session.metadata?.items
         ? JSON.parse(session.metadata.items)
         : [];
@@ -64,33 +66,37 @@ app.post(
         ? JSON.parse(session.metadata.adresse)
         : {};
 
-      await db.collection("commandes").add({
-        stripeSessionId: session.id,
-        email: session.customer_details?.email || session.metadata?.email || "",
-        adresse: adresse,
-        montant: session.amount_total / 100,
-        devise: session.currency,
-        statut: "payé",
-        date: admin.firestore.FieldValue.serverTimestamp(),
-        items: items,
-        envoyePrintful: false,
-      });
+      try {
+        await db.collection("commandes").add({
+          stripeSessionId: session.id,
+          email: session.customer_details?.email || "",
+          montant: session.amount_total / 100,
+          devise: session.currency,
+          statut: "payé",
+          date: admin.firestore.FieldValue.serverTimestamp(),
+          adresse: adresse, // ✅ adresse bien enregistrée
+          items: items,
+          envoyePrintful: false,
+        });
 
-      console.log("✅ Commande Stripe enregistrée Firestore");
+        console.log("✅ Commande Stripe enregistrée Firestore avec adresse + items");
+      } catch (err) {
+        console.error("❌ Erreur Firestore :", err);
+      }
     }
 
     res.json({ received: true });
   }
 );
 
-// ======================================================
-// 🔥 ENSUITE express.json() POUR LE RESTE
-// ======================================================
+// ===================================================
+// 🔥 ENSUITE express.json()
+// ===================================================
 app.use(express.json());
 
-// =============================
+// ===================================================
 // 💳 CREATE STRIPE SESSION
-// =============================
+// ===================================================
 app.post("/create-stripe-session", async (req, res) => {
   const { items, email, adresse } = req.body;
 
@@ -109,8 +115,8 @@ app.post("/create-stripe-session", async (req, res) => {
       line_items,
       mode: "payment",
       metadata: {
-        items: JSON.stringify(items),      // ⚠️ IMPORTANT
-        adresse: JSON.stringify(adresse),  // ⚠️ IMPORTANT
+        items: JSON.stringify(items || []),
+        adresse: JSON.stringify(adresse || {}),
         email: email || "",
       },
       success_url: "https://wellshoppings.com/#/success",
@@ -119,14 +125,14 @@ app.post("/create-stripe-session", async (req, res) => {
 
     res.json({ url: session.url });
   } catch (err) {
-    console.error("❌ Stripe session error:", err.message);
+    console.error("❌ Stripe session error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// =============================
+// ===================================================
 // 🅿️ PAYPAL CONFIG
-// =============================
+// ===================================================
 const paypalEnv =
   process.env.PAYPAL_ENV === "live"
     ? new paypal.core.LiveEnvironment(
@@ -140,9 +146,9 @@ const paypalEnv =
 
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
 
-// =============================
+// ===================================================
 // 🅿️ CREATE PAYPAL ORDER
-// =============================
+// ===================================================
 app.post("/create-paypal-order", async (req, res) => {
   const { items } = req.body;
 
@@ -152,7 +158,6 @@ app.post("/create-paypal-order", async (req, res) => {
 
   const request = new paypal.orders.OrdersCreateRequest();
   request.prefer("return=representation");
-
   request.requestBody({
     intent: "CAPTURE",
     purchase_units: [
@@ -169,50 +174,15 @@ app.post("/create-paypal-order", async (req, res) => {
     const order = await paypalClient.execute(request);
     res.json({ id: order.result.id });
   } catch (err) {
-    console.error("❌ PayPal create order error:", err.message);
+    console.error("❌ PayPal create order error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// =============================
-// 🅿️ CAPTURE PAYPAL ORDER
-// =============================
-app.post("/capture-paypal-order", async (req, res) => {
-  const { orderId, items, user, adresse } = req.body;
-
-  try {
-    const capture = await paypalClient.execute(
-      new paypal.orders.OrdersCaptureRequest(orderId)
-    );
-
-    await db.collection("commandes").add({
-      paypalOrderId: orderId,
-      email: user?.email || "",
-      adresse: adresse || {},
-      montant:
-        capture.result.purchase_units[0].payments.captures[0].amount.value,
-      devise:
-        capture.result.purchase_units[0].payments.captures[0].amount.currency_code,
-      statut: "payé",
-      date: admin.firestore.FieldValue.serverTimestamp(),
-      items: items,
-      envoyePrintful: false,
-    });
-
-    console.log("✅ Commande PayPal enregistrée Firestore");
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error("❌ Capture PayPal error:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// =============================
+// ===================================================
 // 🚀 START SERVER
-// =============================
+// ===================================================
 const PORT = process.env.PORT || 8080;
-
 app.listen(PORT, () =>
   console.log(`🚀 Backend payments running on port ${PORT}`)
 );
