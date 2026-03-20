@@ -1,95 +1,170 @@
+//server.js bon
+// server.js
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
-import paypal from "@paypal/checkout-server-sdk";
 import Stripe from "stripe";
-import { initializeApp, cert } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import admin from "firebase-admin";
+import paypal from "@paypal/checkout-server-sdk";
+import dotenv from "dotenv";
 
 dotenv.config();
-
 const app = express();
-app.use(cors());
-app.use(express.json());
 
+// ----------------------------
 // Firestore
-initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
-const db = getFirestore();
+// ----------------------------
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+const db = admin.firestore();
 
-// PayPal
-const paypalEnv = new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET);
-const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
-
+// ----------------------------
 // Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// Créer commande PayPal
+// ----------------------------
+// PayPal
+const paypalEnv =
+  process.env.PAYPAL_ENV === "live"
+    ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET)
+    : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET);
+
+const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
+
+// ----------------------------
+// CORS pour GitHub Pages
+// ----------------------------
+app.use(
+  cors({
+    origin: "https://musrh.github.io",
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
+
+// ----------------------------
+// Webhook Stripe (express.raw!)
+app.post(
+  "/webhook",
+  express.raw({ type: "application/json" }), // ⚠️ requis par Stripe
+  async (req, res) => {
+    const sig = req.headers["stripe-signature"];
+    let event;
+
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    } catch (err) {
+      console.error("⚠️ Webhook signature error:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+      try {
+        await db.collection("commandes").add({
+          stripeSessionId: session.id,
+          email: session.customer_details?.email || null,
+          montant: session.amount_total / 100,
+          devise: session.currency,
+          statut: "payé",
+          date: admin.firestore.FieldValue.serverTimestamp(),
+          items: session.metadata?.items ? JSON.parse(session.metadata.items) : [],
+        });
+        console.log("✅ Commande Stripe enregistrée dans Firestore");
+      } catch (err) {
+        console.error("❌ Erreur Firestore Stripe :", err);
+      }
+    }
+
+    res.json({ received: true });
+  }
+);
+
+// ----------------------------
+// Middleware JSON pour les autres routes
+app.use(express.json());
+
+// ----------------------------
+// CREATE STRIPE CHECKOUT SESSION
+app.post("/create-stripe-session", async (req, res) => {
+  const items = req.body.items || [];
+  try {
+    const line_items = items.map((i) => ({
+      price_data: {
+        currency: "eur",
+        product_data: { name: i.nom },
+        unit_amount: i.prix * 100,
+      },
+      quantity: i.quantity,
+    }));
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      line_items,
+      mode: "payment",
+      metadata: { items: JSON.stringify(items) },
+      success_url: "https://musrh.github.io/Monprijet/#/success",
+      cancel_url: "https://musrh.github.io/Monprijet/#/cancel",
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error("Stripe error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ----------------------------
+// CREATE PAYPAL ORDER
 app.post("/create-paypal-order", async (req, res) => {
-  const { items, email, adresse } = req.body;
-  const total = items.reduce((sum, p) => sum + p.prix * p.quantity, 0).toFixed(2);
+  const items = req.body.items || [];
+  const total = items.reduce((sum, i) => sum + i.prix * i.quantity, 0).toFixed(2);
+
+  console.log("Commande PayPal:", items);
 
   const request = new paypal.orders.OrdersCreateRequest();
   request.prefer("return=representation");
   request.requestBody({
     intent: "CAPTURE",
-    purchase_units: [{
-      amount: { currency_code: "EUR", value: total, breakdown: { item_total: { currency_code: "EUR", value: total } } },
-      items: items.map(p => ({ name: p.nom, unit_amount: { currency_code: "EUR", value: p.prix }, quantity: p.quantity })),
-      shipping: {
-        address: {
-          address_line_1: adresse.adresse1,
-          address_line_2: adresse.adresse2 || "",
-          admin_area_2: adresse.ville,
-          postal_code: adresse.codePostal,
-          country_code: adresse.pays
-        }
-      }
-    }],
-    application_context: { shipping_preference: "SET_PROVIDED_ADDRESS" }
+    purchase_units: [{ amount: { currency_code: "EUR", value: total } }],
   });
 
-  const order = await paypalClient.execute(request);
-  res.json({ id: order.result.id });
+  try {
+    const order = await paypalClient.execute(request);
+    res.json({ id: order.result.id });
+  } catch (err) {
+    console.error("PayPal create order error:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// Capturer PayPal
+// ----------------------------
+// CAPTURE PAYPAL ORDER
 app.post("/capture-paypal-order", async (req, res) => {
-  const { orderId, items, user, adresse } = req.body;
-  const request = new paypal.orders.OrdersCaptureRequest(orderId);
-  request.requestBody({});
-  const capture = await paypalClient.execute(request);
+  const { orderId, user, items } = req.body;
+  try {
+    const request = new paypal.orders.OrdersCaptureRequest(orderId);
+    request.requestBody({});
+    const capture = await paypalClient.execute(request);
 
-  // Sauvegarde Firestore
-  await db.collection("orders").add({
-    user: user.email,
-    items,
-    adresse,
-    paymentMethod: "paypal",
-    status: "paid",
-    date: new Date()
-  });
+    await db.collection("commandes").add({
+      paypalOrderId: orderId,
+      email: user.email,
+      montant: capture.result.purchase_units[0].payments.captures[0].amount.value,
+      devise: capture.result.purchase_units[0].payments.captures[0].amount.currency_code,
+      statut: "payé",
+      date: admin.firestore.FieldValue.serverTimestamp(),
+      items,
+    });
 
-  res.json(capture.result);
+    res.json({ capture });
+    console.log("✅ Commande PayPal enregistrée dans Firestore");
+  } catch (err) {
+    console.error("Capture PayPal error:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// Créer session Stripe
-app.post("/create-stripe-session", async (req, res) => {
-  const { items, email, adresse } = req.body;
-
-  const session = await stripe.checkout.sessions.create({
-    payment_method_types: ['card'],
-    line_items: items.map(p => ({
-      price_data: { currency: 'eur', product_data: { name: p.nom }, unit_amount: Math.round(p.prix*100) },
-      quantity: p.quantity
-    })),
-    mode: 'payment',
-    success_url: 'https://ton-site.com/success',
-    cancel_url: 'https://ton-site.com/cancel',
-    customer_email: email,
-    metadata: { adresse: JSON.stringify(adresse), items: JSON.stringify(items) }
-  });
-
-  res.json({ url: session.url });
-});
-
-app.listen(3000, () => console.log("Server running on port 3000"));
+// ----------------------------
+// START SERVER
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Backend payments running on port ${PORT}`));
