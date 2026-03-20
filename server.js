@@ -1,129 +1,32 @@
-// server.js
 import express from "express";
 import cors from "cors";
 import Stripe from "stripe";
 import admin from "firebase-admin";
 import paypal from "@paypal/checkout-server-sdk";
-import fetch from "node-fetch";
 import dotenv from "dotenv";
 
 dotenv.config();
 const app = express();
-app.use(express.json());
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ----------------------------
 // 🔥 FIREBASE
-// ----------------------------
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 const db = admin.firestore();
 
-// ----------------------------
-// 💳 STRIPE
-// ----------------------------
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-
-// ----------------------------
-// 🅿️ PAYPAL
-// ----------------------------
-const paypalEnv =
-  process.env.PAYPAL_ENV === "live"
-    ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET)
-    : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET);
-const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
-
-// ----------------------------
-// 🌍 CORS
-// ----------------------------
+// 🔥 CORS
 app.use(
   cors({
     origin: "https://wellshoppings.com",
     methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type"],
   })
 );
 
-// ----------------------------
-// 🔹 Fonction pour transformer les items
-// ----------------------------
-async function transformItems(items) {
-  return items.map(i => ({
-    nom: i.nom,
-    prix: i.prix,
-    quantity: i.quantity,
-    taille: i.taille || null,
-    couleur: i.couleur || null,
-    id: i.id,
-  }));
-}
-
-// ----------------------------
-// 🔹 Fonction pour envoyer à Printful (optionnel)
-// ----------------------------
-async function sendOrderToPrintful(order) {
-  try {
-    const response = await fetch(
-      "https://printfulpasscommandes-production.up.railway.app/create-order",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ order }),
-      }
-    );
-    const data = await response.json();
-    if (!response.ok || !data.success) {
-      console.error("❌ Printful order failed:", data.message || data);
-      return false;
-    }
-    console.log("✅ Commande envoyée à Printful:", data.data);
-    return true;
-  } catch (err) {
-    console.error("❌ Error sending order to Printful:", err.message);
-    return false;
-  }
-}
-
-// ----------------------------
-// 💳 CREATE STRIPE SESSION
-// ----------------------------
-app.post("/create-stripe-session", async (req, res) => {
-  const { items, adresseLivraison, email } = req.body;
-
-  try {
-    const line_items = items.map(i => ({
-      price_data: {
-        currency: "eur",
-        product_data: { name: i.nom },
-        unit_amount: i.prix * 100,
-      },
-      quantity: i.quantity,
-    }));
-
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      line_items,
-      mode: "payment",
-      metadata: {
-        items: JSON.stringify(items),
-        adresseLivraison: JSON.stringify(adresseLivraison),
-        email: email || "",
-      },
-      success_url: "https://wellshoppings.com/#/success",
-      cancel_url: "https://wellshoppings.com/#/cancel",
-    });
-
-    res.json({ url: session.url });
-  } catch (err) {
-    console.error("❌ Stripe session error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ----------------------------
-// 🔔 STRIPE WEBHOOK
-// ----------------------------
+// =====================================
+// 🚨 WEBHOOK DOIT ÊTRE AVANT express.json()
+// =====================================
 app.post(
   "/webhook",
   express.raw({ type: "application/json" }),
@@ -133,7 +36,7 @@ app.post(
 
     try {
       event = stripe.webhooks.constructEvent(
-        req.body,
+        req.body, // ⚠️ RAW BODY
         sig,
         process.env.STRIPE_WEBHOOK_SECRET
       );
@@ -142,103 +45,27 @@ app.post(
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
+    console.log("✅ Webhook reçu:", event.type);
+
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
-      try {
-        const items = session.metadata.items ? JSON.parse(session.metadata.items) : [];
-        const adresse = session.metadata.adresseLivraison ? JSON.parse(session.metadata.adresseLivraison) : {};
 
-        const transformedItems = await transformItems(items);
+      await db.collection("commandes").add({
+        stripeSessionId: session.id,
+        email: session.customer_details?.email || "",
+        montant: session.amount_total / 100,
+        statut: "payé",
+        date: admin.firestore.FieldValue.serverTimestamp(),
+      });
 
-        await db.collection("commandes").add({
-          stripeSessionId: session.id,
-          email: session.customer_details?.email || session.metadata?.email || "",
-          adresse,
-          montant: session.amount_total / 100,
-          devise: session.currency,
-          statut: "payé",
-          date: admin.firestore.FieldValue.serverTimestamp(),
-          items: transformedItems,
-          envoyePrintful: false,
-        });
-
-        console.log("✅ Commande Stripe enregistrée avec items et adresse");
-      } catch (err) {
-        console.error("❌ Firestore Stripe error:", err);
-      }
+      console.log("✅ Commande Stripe enregistrée Firestore");
     }
 
     res.json({ received: true });
   }
 );
 
-// ----------------------------
-// 🅿️ PAYPAL CREATE ORDER
-// ----------------------------
-app.post("/create-paypal-order", async (req, res) => {
-  const { items } = req.body;
-  const total = items.reduce((sum, i) => sum + i.prix * i.quantity, 0).toFixed(2);
-
-  const request = new paypal.orders.OrdersCreateRequest();
-  request.prefer("return=representation");
-  request.requestBody({
-    intent: "CAPTURE",
-    purchase_units: [{ amount: { currency_code: "EUR", value: total } }],
-  });
-
-  try {
-    const order = await paypalClient.execute(request);
-    res.json({ id: order.result.id });
-  } catch (err) {
-    console.error("❌ PayPal create order error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ----------------------------
-// 🅿️ PAYPAL CAPTURE ORDER
-// ----------------------------
-app.post("/capture-paypal-order", async (req, res) => {
-  const { orderId, user, items, adresseLivraison } = req.body;
-
-  try {
-    const capture = await paypalClient.execute(
-      new paypal.orders.OrdersCaptureRequest(orderId).requestBody({})
-    );
-
-    const transformedItems = await transformItems(items);
-
-    await db.collection("commandes").add({
-      paypalOrderId: orderId,
-      email: user.email,
-      adresse: adresseLivraison || {},
-      montant: capture.result.purchase_units[0].payments.captures[0].amount.value,
-      devise: capture.result.purchase_units[0].payments.captures[0].amount.currency_code,
-      statut: "payé",
-      date: admin.firestore.FieldValue.serverTimestamp(),
-      items: transformedItems,
-      envoyePrintful: false,
-    });
-
-    console.log("✅ Commande PayPal enregistrée avec items et adresse");
-
-    // Envoi à Printful optionnel
-    const orderForPrintful = {
-      nomClient: user.name || user.email || "Client",
-      adresse: adresseLivraison || {},
-      items: transformedItems,
-    };
-    await sendOrderToPrintful(orderForPrintful);
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error("❌ PayPal capture error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ----------------------------
-// 🚀 START SERVER
-// ----------------------------
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`🚀 Backend payments running on port ${PORT}`));
+// =====================================
+// 🔥 ENSUITE SEULEMENT express.json()
+// =====================================
+app.use(express.json());
