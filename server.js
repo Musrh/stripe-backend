@@ -1,188 +1,95 @@
 import express from "express";
 import cors from "cors";
-import Stripe from "stripe";
-import admin from "firebase-admin";
-import paypal from "@paypal/checkout-server-sdk";
 import dotenv from "dotenv";
+import paypal from "@paypal/checkout-server-sdk";
+import Stripe from "stripe";
+import { initializeApp, cert } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 
 dotenv.config();
+
 const app = express();
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-
-// ----------------------------
-// 🔥 FIREBASE
-// ----------------------------
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
-
-const db = admin.firestore();
-
-// ----------------------------
-// 🌍 CORS
-// ----------------------------
-app.use(
-  cors({
-    origin: "https://wellshoppings.com",
-    methods: ["GET", "POST"],
-  })
-);
-
-// ===================================================
-// 🚨 WEBHOOK STRIPE (DOIT ÊTRE AVANT express.json())
-// ===================================================
-app.post(
-  "/webhook",
-  express.raw({ type: "application/json" }),
-  async (req, res) => {
-    const sig = req.headers["stripe-signature"];
-    let event;
-
-    try {
-      event = stripe.webhooks.constructEvent(
-        req.body,
-        sig,
-        process.env.STRIPE_WEBHOOK_SECRET
-      );
-    } catch (err) {
-      console.error("⚠️ Webhook signature error:", err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-
-    console.log("✅ Webhook reçu :", event.type);
-
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-
-      console.log("📦 Metadata reçu :", session.metadata);
-
-      const items = session.metadata?.items
-        ? JSON.parse(session.metadata.items)
-        : [];
-
-      const adresse = session.metadata?.adresse
-        ? JSON.parse(session.metadata.adresse)
-        : {};
-
-      try {
-        await db.collection("commandes").add({
-          stripeSessionId: session.id,
-          email: session.customer_details?.email || "",
-          montant: session.amount_total / 100,
-          devise: session.currency,
-          statut: "payé",
-          date: admin.firestore.FieldValue.serverTimestamp(),
-          adresse: adresse, // ✅ adresse bien enregistrée
-          items: items,
-          envoyePrintful: false,
-        });
-
-        console.log("✅ Commande Stripe enregistrée Firestore avec adresse + items");
-      } catch (err) {
-        console.error("❌ Erreur Firestore :", err);
-      }
-    }
-
-    res.json({ received: true });
-  }
-);
-
-// ===================================================
-// 🔥 ENSUITE express.json()
-// ===================================================
+app.use(cors());
 app.use(express.json());
 
-// ===================================================
-// 💳 CREATE STRIPE SESSION
-// ===================================================
-app.post("/create-stripe-session", async (req, res) => {
-  const { items, email, adresse } = req.body;
+// Firestore
+initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
+const db = getFirestore();
 
-  try {
-    const line_items = items.map((i) => ({
-      price_data: {
-        currency: "eur",
-        product_data: { name: i.nom },
-        unit_amount: i.prix * 100,
-      },
-      quantity: i.quantity,
-    }));
-
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      line_items,
-      mode: "payment",
-      metadata: {
-        items: JSON.stringify(items || []),
-        adresse: JSON.stringify(adresse || {}),
-        email: email || "",
-      },
-      success_url: "https://wellshoppings.com/#/success",
-      cancel_url: "https://wellshoppings.com/#/cancel",
-    });
-
-    res.json({ url: session.url });
-  } catch (err) {
-    console.error("❌ Stripe session error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ===================================================
-// 🅿️ PAYPAL CONFIG
-// ===================================================
-const paypalEnv =
-  process.env.PAYPAL_ENV === "live"
-    ? new paypal.core.LiveEnvironment(
-        process.env.PAYPAL_CLIENT_ID,
-        process.env.PAYPAL_SECRET
-      )
-    : new paypal.core.SandboxEnvironment(
-        process.env.PAYPAL_CLIENT_ID,
-        process.env.PAYPAL_SECRET
-      );
-
+// PayPal
+const paypalEnv = new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET);
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
 
-// ===================================================
-// 🅿️ CREATE PAYPAL ORDER
-// ===================================================
-app.post("/create-paypal-order", async (req, res) => {
-  const { items } = req.body;
+// Stripe
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-  const total = items
-    .reduce((sum, i) => sum + i.prix * i.quantity, 0)
-    .toFixed(2);
+// Créer commande PayPal
+app.post("/create-paypal-order", async (req, res) => {
+  const { items, email, adresse } = req.body;
+  const total = items.reduce((sum, p) => sum + p.prix * p.quantity, 0).toFixed(2);
 
   const request = new paypal.orders.OrdersCreateRequest();
   request.prefer("return=representation");
   request.requestBody({
     intent: "CAPTURE",
-    purchase_units: [
-      {
-        amount: {
-          currency_code: "EUR",
-          value: total,
-        },
-      },
-    ],
+    purchase_units: [{
+      amount: { currency_code: "EUR", value: total, breakdown: { item_total: { currency_code: "EUR", value: total } } },
+      items: items.map(p => ({ name: p.nom, unit_amount: { currency_code: "EUR", value: p.prix }, quantity: p.quantity })),
+      shipping: {
+        address: {
+          address_line_1: adresse.adresse1,
+          address_line_2: adresse.adresse2 || "",
+          admin_area_2: adresse.ville,
+          postal_code: adresse.codePostal,
+          country_code: adresse.pays
+        }
+      }
+    }],
+    application_context: { shipping_preference: "SET_PROVIDED_ADDRESS" }
   });
 
-  try {
-    const order = await paypalClient.execute(request);
-    res.json({ id: order.result.id });
-  } catch (err) {
-    console.error("❌ PayPal create order error:", err);
-    res.status(500).json({ error: err.message });
-  }
+  const order = await paypalClient.execute(request);
+  res.json({ id: order.result.id });
 });
 
-// ===================================================
-// 🚀 START SERVER
-// ===================================================
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () =>
-  console.log(`🚀 Backend payments running on port ${PORT}`)
-);
+// Capturer PayPal
+app.post("/capture-paypal-order", async (req, res) => {
+  const { orderId, items, user, adresse } = req.body;
+  const request = new paypal.orders.OrdersCaptureRequest(orderId);
+  request.requestBody({});
+  const capture = await paypalClient.execute(request);
+
+  // Sauvegarde dans Firestore
+  await db.collection("orders").add({
+    user: user.email,
+    items,
+    adresse,
+    paymentMethod: "paypal",
+    status: "paid",
+    date: new Date()
+  });
+
+  res.json(capture.result);
+});
+
+// Créer session Stripe
+app.post("/create-stripe-session", async (req, res) => {
+  const { items, email, adresse } = req.body;
+
+  const session = await stripe.checkout.sessions.create({
+    payment_method_types: ['card'],
+    line_items: items.map(p => ({
+      price_data: { currency: 'eur', product_data: { name: p.nom }, unit_amount: Math.round(p.prix*100) },
+      quantity: p.quantity
+    })),
+    mode: 'payment',
+    success_url: 'https://ton-site.com/success',
+    cancel_url: 'https://ton-site.com/cancel',
+    customer_email: email,
+    metadata: { adresse: JSON.stringify(adresse), items: JSON.stringify(items) }
+  });
+
+  res.json({ url: session.url });
+});
+
+app.listen(3000, () => console.log("Server running on port 3000"));
