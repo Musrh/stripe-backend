@@ -1,3 +1,4 @@
+// server.js
 import express from "express";
 import cors from "cors";
 import Stripe from "stripe";
@@ -86,8 +87,10 @@ app.post("/create-stripe-session", async (req, res) => {
         quantity: item.quantity,
       })),
       mode: "payment",
-      success_url: "https://wellshoppings.com/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url:  "https://wellshoppings.com/cancel",
+      // ✅ SPA hash URLs pour éviter 404
+      success_url:
+        "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
+      cancel_url: "https://wellshoppings.com/#/cancel",
       metadata: { adresseLivraison },
     });
 
@@ -105,8 +108,14 @@ if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) {
 
 const paypalEnvironment =
   process.env.PAYPAL_ENV === "production"
-    ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET)
-    : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET);
+    ? new paypal.core.LiveEnvironment(
+        process.env.PAYPAL_CLIENT_ID,
+        process.env.PAYPAL_CLIENT_SECRET
+      )
+    : new paypal.core.SandboxEnvironment(
+        process.env.PAYPAL_CLIENT_ID,
+        process.env.PAYPAL_CLIENT_SECRET
+      );
 
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnvironment);
 
@@ -114,7 +123,9 @@ const paypalClient = new paypal.core.PayPalHttpClient(paypalEnvironment);
 app.post("/create-paypal-order", async (req, res) => {
   try {
     const { items } = req.body;
-    const total = items.reduce((sum, item) => sum + item.prix * item.quantity, 0).toFixed(2);
+    const total = items
+      .reduce((sum, item) => sum + item.prix * item.quantity, 0)
+      .toFixed(2);
 
     const request = new paypal.orders.OrdersCreateRequest();
     request.prefer("return=representation");
@@ -145,7 +156,8 @@ app.post("/capture-paypal-order", async (req, res) => {
 
       await db.collection("commandes").add({
         email,
-        montant: capture.result.purchase_units[0].payments.captures[0].amount.value,
+        montant:
+          capture.result.purchase_units[0].payments.captures[0].amount.value,
         adresse: adresseLivraison,
         paymentMethod: "paypal",
         createdAt: new Date(),
@@ -161,4 +173,6 @@ app.post("/capture-paypal-order", async (req, res) => {
 
 // ================= START =================
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log("🚀 Serveur démarré sur port", PORT));
+app.listen(PORT, () =>
+  console.log("🚀 Serveur démarré sur port", PORT)
+);
