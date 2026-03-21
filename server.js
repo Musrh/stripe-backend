@@ -8,10 +8,8 @@ import admin from "firebase-admin";
 import bodyParser from "body-parser";
 
 dotenv.config();
-
 const app = express();
 app.use(cors({ origin: "*" }));
-app.use(express.json());
 
 // ================= FIREBASE =================
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
@@ -36,38 +34,50 @@ if (!process.env.STRIPE_SECRET_KEY) {
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// 🔹 Webhook Stripe
-app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, res) => {
-  const sig = req.headers["stripe-signature"];
-  try {
-    const event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+// ---------------- Webhook Stripe ----------------
+// ⚠️ utiliser bodyParser.raw pour le webhook uniquement
+app.post(
+  "/webhook",
+  bodyParser.raw({ type: "application/json" }),
+  async (req, res) => {
+    const sig = req.headers["stripe-signature"];
+    try {
+      const event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
 
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-      const metadata = session.metadata ? JSON.parse(session.metadata.data) : {};
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object;
+        const metadata = session.metadata ? JSON.parse(session.metadata.data) : {};
 
-      await db.collection("commandes").add({
-        email: session.customer_email,
-        items: metadata.items || [],
-        montant: session.amount_total / 100,
-        adresse: metadata.adresseLivraison || "",
-        paymentMethod: "stripe",
-        sessionId: session.id,
-        status: "paid",
-        createdAt: new Date(),
-      });
+        await db.collection("commandes").add({
+          email: session.customer_email,
+          items: metadata.items || [],
+          montant: session.amount_total / 100,
+          adresse: metadata.adresseLivraison || "",
+          paymentMethod: "stripe",
+          sessionId: session.id,
+          status: "paid",
+          createdAt: new Date(),
+        });
 
-      console.log("✅ Commande Stripe confirmée dans Firestore");
+        console.log("✅ Commande Stripe confirmée dans Firestore");
+      }
+
+      res.json({ received: true });
+    } catch (err) {
+      console.error("❌ Webhook Stripe error:", err.message);
+      res.status(400).send(`Webhook Error: ${err.message}`);
     }
-
-    res.json({ received: true });
-  } catch (err) {
-    console.error("❌ Webhook Stripe error:", err.message);
-    res.status(400).send(`Webhook Error: ${err.message}`);
   }
-});
+);
 
-// 🔹 Création session Stripe
+// ================= Autres routes JSON =================
+app.use(express.json()); // Pour toutes les autres routes
+
+// Création session Stripe
 app.post("/create-stripe-session", async (req, res) => {
   try {
     const { items, email, adresseLivraison } = req.body;
@@ -110,7 +120,7 @@ const paypalEnvironment =
 
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnvironment);
 
-// 🔹 Création ordre PayPal
+// Création ordre PayPal
 app.post("/create-paypal-order", async (req, res) => {
   try {
     const { items } = req.body;
@@ -131,7 +141,7 @@ app.post("/create-paypal-order", async (req, res) => {
   }
 });
 
-// 🔹 Capture ordre PayPal
+// Capture ordre PayPal
 app.post("/capture-paypal-order", async (req, res) => {
   try {
     const { orderId, email, adresseLivraison, items } = req.body;
