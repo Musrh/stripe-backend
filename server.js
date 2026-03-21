@@ -1,3 +1,4 @@
+// server.js
 import express from "express";
 import cors from "cors";
 import Stripe from "stripe";
@@ -91,8 +92,9 @@ app.post("/create-stripe-session", async (req, res) => {
         quantity: item.quantity,
       })),
       mode: "payment",
-      success_url: "https://wellshoppings.com/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url: "https://wellshoppings.com/cancel",
+      // SPA hash mode pour éviter 404
+      success_url: "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
+      cancel_url: "https://wellshoppings.com/#/cancel",
       metadata: {
         data: JSON.stringify({ items, adresseLivraison }),
       },
@@ -112,8 +114,14 @@ if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) {
 
 const paypalEnvironment =
   process.env.PAYPAL_ENV === "production"
-    ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET)
-    : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET);
+    ? new paypal.core.LiveEnvironment(
+        process.env.PAYPAL_CLIENT_ID,
+        process.env.PAYPAL_CLIENT_SECRET
+      )
+    : new paypal.core.SandboxEnvironment(
+        process.env.PAYPAL_CLIENT_ID,
+        process.env.PAYPAL_CLIENT_SECRET
+      );
 
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnvironment);
 
