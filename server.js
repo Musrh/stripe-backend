@@ -29,20 +29,21 @@ const db = admin.firestore();
 console.log("✅ Firebase connecté");
 
 // ================= STRIPE =================
-if (!process.env.STRIPE_SECRET_KEY) {
-  console.error("❌ STRIPE_SECRET_KEY manquant !");
+if (!process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_WEBHOOK_SECRET) {
+  console.error("❌ STRIPE_SECRET_KEY ou STRIPE_WEBHOOK_SECRET manquant !");
   process.exit(1);
 }
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: "2022-11-15",
+});
 
-// ---------- WEBHOOK STRIPE ----------
+// 🔹 Webhook Stripe
 app.post(
-  "/stripe-webhook", // ⚠️ Cette URL doit correspondre à celle configurée dans Stripe
+  "/stripe-webhook",
   bodyParser.raw({ type: "application/json" }),
   async (req, res) => {
     const sig = req.headers["stripe-signature"];
-
     try {
       const event = stripe.webhooks.constructEvent(
         req.body,
@@ -76,7 +77,7 @@ app.post(
   }
 );
 
-// ---------- CREATION SESSION STRIPE ----------
+// 🔹 Création session Stripe
 app.post("/create-stripe-session", async (req, res) => {
   try {
     const { items, email, adresseLivraison } = req.body;
@@ -126,7 +127,7 @@ const paypalEnvironment =
 
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnvironment);
 
-// ---------- CREATION ORDRE PAYPAL ----------
+// 🔹 Création ordre PayPal
 app.post("/create-paypal-order", async (req, res) => {
   try {
     const { items } = req.body;
@@ -149,7 +150,7 @@ app.post("/create-paypal-order", async (req, res) => {
   }
 });
 
-// ---------- CAPTURE ORDRE PAYPAL ----------
+// 🔹 Capture ordre PayPal
 app.post("/capture-paypal-order", async (req, res) => {
   try {
     const { orderId, email, adresseLivraison, items } = req.body;
@@ -180,8 +181,6 @@ app.post("/capture-paypal-order", async (req, res) => {
   }
 });
 
-// ================= START SERVER =================
+// ================= START =================
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () =>
-  console.log(`🚀 Serveur démarré sur port ${PORT} (Stripe & PayPal)`)
-);
+app.listen(PORT, () => console.log("🚀 Serveur démarré sur port", PORT));
