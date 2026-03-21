@@ -29,16 +29,14 @@ const db = admin.firestore();
 console.log("✅ Firebase connecté");
 
 // ================= STRIPE =================
-if (!process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_WEBHOOK_SECRET) {
-  console.error("❌ STRIPE_SECRET_KEY ou STRIPE_WEBHOOK_SECRET manquant !");
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.error("❌ STRIPE_SECRET_KEY manquant !");
   process.exit(1);
 }
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: "2022-11-15",
-});
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// 🔹 Webhook Stripe
+// ----------------- Webhook Stripe -----------------
 app.post(
   "/stripe-webhook",
   bodyParser.raw({ type: "application/json" }),
@@ -59,7 +57,13 @@ app.post(
           email: session.customer_email,
           items: metadata.items || [],
           montant: session.amount_total / 100,
-          adresse: metadata.adresseLivraison || "",
+          adresse: {
+            adresse1: metadata.adresse1 || "",
+            adresse2: metadata.adresse2 || "",
+            codePostal: metadata.codePostal || "",
+            ville: metadata.ville || "",
+            pays: metadata.pays || "",
+          },
           paymentMethod: "stripe",
           sessionId: session.id,
           status: "paid",
@@ -77,10 +81,10 @@ app.post(
   }
 );
 
-// 🔹 Création session Stripe
+// ----------------- Création session Stripe -----------------
 app.post("/create-stripe-session", async (req, res) => {
   try {
-    const { items, email, adresseLivraison } = req.body;
+    const { items, email, adresse1, adresse2, codePostal, ville, pays } = req.body;
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
@@ -94,11 +98,17 @@ app.post("/create-stripe-session", async (req, res) => {
         quantity: item.quantity,
       })),
       mode: "payment",
-      success_url:
-        "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url: "https://wellshoppings.com/#/cancel",
+      success_url: "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
+      cancel_url:  "https://wellshoppings.com/#/cancel",
       metadata: {
-        data: JSON.stringify({ items, adresseLivraison }),
+        data: JSON.stringify({
+          items,
+          adresse1,
+          adresse2,
+          codePostal,
+          ville,
+          pays,
+        }),
       },
     });
 
@@ -116,24 +126,16 @@ if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) {
 
 const paypalEnvironment =
   process.env.PAYPAL_ENV === "production"
-    ? new paypal.core.LiveEnvironment(
-        process.env.PAYPAL_CLIENT_ID,
-        process.env.PAYPAL_CLIENT_SECRET
-      )
-    : new paypal.core.SandboxEnvironment(
-        process.env.PAYPAL_CLIENT_ID,
-        process.env.PAYPAL_CLIENT_SECRET
-      );
+    ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET)
+    : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET);
 
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnvironment);
 
-// 🔹 Création ordre PayPal
+// ----------------- Création ordre PayPal -----------------
 app.post("/create-paypal-order", async (req, res) => {
   try {
     const { items } = req.body;
-    const total = items
-      .reduce((sum, item) => sum + item.prix * item.quantity, 0)
-      .toFixed(2);
+    const total = items.reduce((sum, item) => sum + item.prix * item.quantity, 0).toFixed(2);
 
     const request = new paypal.orders.OrdersCreateRequest();
     request.prefer("return=representation");
@@ -150,10 +152,10 @@ app.post("/create-paypal-order", async (req, res) => {
   }
 });
 
-// 🔹 Capture ordre PayPal
+// ----------------- Capture ordre PayPal -----------------
 app.post("/capture-paypal-order", async (req, res) => {
   try {
-    const { orderId, email, adresseLivraison, items } = req.body;
+    const { orderId, email, items, adresse1, adresse2, codePostal, ville, pays } = req.body;
 
     const request = new paypal.orders.OrdersCaptureRequest(orderId);
     request.requestBody({});
@@ -165,9 +167,8 @@ app.post("/capture-paypal-order", async (req, res) => {
       await db.collection("commandes").add({
         email,
         items: items || [],
-        montant:
-          capture.result.purchase_units[0].payments.captures[0].amount.value,
-        adresse: adresseLivraison,
+        montant: capture.result.purchase_units[0].payments.captures[0].amount.value,
+        adresse: { adresse1, adresse2, codePostal, ville, pays },
         paymentMethod: "paypal",
         status: "paid",
         createdAt: new Date(),
