@@ -13,23 +13,33 @@ const app = express();
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 
-// ================= FIREBASE =================
+/* ================= FIREBASE ================= */
+
+if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+  console.error("❌ FIREBASE_SERVICE_ACCOUNT manquant !");
+  process.exit(1);
+}
+
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
 admin.initializeApp({
-  credential: admin.credential.cert({
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-  }),
+  credential: admin.credential.cert(serviceAccount),
 });
 
 const db = admin.firestore();
 
-// ================= STRIPE =================
+console.log("✅ Firebase connecté");
+
+/* ================= STRIPE ================= */
+
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.error("❌ STRIPE_SECRET_KEY manquant !");
+  process.exit(1);
+}
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ⚠️ Webhook brut (avant express.json pour Stripe)
+// 🔹 Webhook Stripe (IMPORTANT: avant express.json)
 app.post(
   "/stripe-webhook",
   bodyParser.raw({ type: "application/json" }),
@@ -53,13 +63,14 @@ app.post(
           montant: session.amount_total / 100,
           adresse: session.metadata.adresseLivraison,
           paymentMethod: "stripe",
+          paymentId: session.id,
           createdAt: new Date(),
         });
       }
 
       res.json({ received: true });
     } catch (err) {
-      console.error("❌ Webhook error:", err.message);
+      console.error("❌ Webhook Stripe error:", err.message);
       res.status(400).send(`Webhook Error: ${err.message}`);
     }
   }
@@ -69,15 +80,15 @@ app.post("/create-stripe-session", async (req, res) => {
   try {
     const { items, email, adresseLivraison } = req.body;
 
+    console.log("Stripe request reçu:", req.body);
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       customer_email: email,
       line_items: items.map((item) => ({
         price_data: {
           currency: "eur",
-          product_data: {
-            name: item.nom,
-          },
+          product_data: { name: item.nom },
           unit_amount: Math.round(item.prix * 100),
         },
         quantity: item.quantity,
@@ -85,20 +96,24 @@ app.post("/create-stripe-session", async (req, res) => {
       mode: "payment",
       success_url: "https://ton-site.com/success",
       cancel_url: "https://ton-site.com/cancel",
-      metadata: {
-        adresseLivraison,
-      },
+      metadata: { adresseLivraison },
     });
 
     res.json({ url: session.url });
   } catch (error) {
-    console.error(error);
+    console.error("❌ Stripe error:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ================= PAYPAL =================
+/* ================= PAYPAL ================= */
 
+if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) {
+  console.error("❌ PayPal credentials manquants !");
+  process.exit(1);
+}
+
+// ⚠️ Sandbox (test). Change en LiveEnvironment si production.
 const environment = new paypal.core.SandboxEnvironment(
   process.env.PAYPAL_CLIENT_ID,
   process.env.PAYPAL_CLIENT_SECRET
@@ -109,6 +124,8 @@ const paypalClient = new paypal.core.PayPalHttpClient(environment);
 app.post("/create-paypal-order", async (req, res) => {
   try {
     const { items } = req.body;
+
+    console.log("PayPal create order:", req.body);
 
     const total = items
       .reduce((sum, item) => sum + item.prix * item.quantity, 0)
@@ -133,7 +150,7 @@ app.post("/create-paypal-order", async (req, res) => {
 
     res.json({ id: order.result.id });
   } catch (error) {
-    console.error(error);
+    console.error("❌ PayPal create error:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -156,20 +173,22 @@ app.post("/capture-paypal-order", async (req, res) => {
           capture.result.purchase_units[0].payments.captures[0].amount.value,
         adresse: adresseLivraison,
         paymentMethod: "paypal",
+        paymentId: orderId,
         createdAt: new Date(),
       });
     }
 
     res.json({ success: true });
   } catch (error) {
-    console.error(error);
+    console.error("❌ PayPal capture error:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ================= START =================
+/* ================= START ================= */
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
+
 app.listen(PORT, () => {
   console.log("🚀 Serveur démarré sur port", PORT);
 });
