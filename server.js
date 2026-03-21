@@ -36,7 +36,7 @@ if (!process.env.STRIPE_SECRET_KEY) {
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// Webhook Stripe
+// 🔹 Webhook Stripe pour confirmer paiement
 app.post(
   "/stripe-webhook",
   bodyParser.raw({ type: "application/json" }),
@@ -53,13 +53,17 @@ app.post(
         const session = event.data.object;
         console.log("✅ Paiement Stripe confirmé");
 
-        await db.collection("commandes").add({
-          email: session.customer_email,
-          montant: session.amount_total / 100,
-          adresse: session.metadata.adresseLivraison,
-          paymentMethod: "stripe",
-          createdAt: new Date(),
-        });
+        // Mettre à jour la commande existante à "paid"
+        const snapshot = await db
+          .collection("commandes")
+          .where("sessionId", "==", session.id)
+          .get();
+
+        if (!snapshot.empty) {
+          snapshot.forEach(async (doc) => {
+            await doc.ref.update({ status: "paid" });
+          });
+        }
       }
 
       res.json({ received: true });
@@ -70,7 +74,7 @@ app.post(
   }
 );
 
-// Création session Stripe
+// 🔹 Création session Stripe
 app.post("/create-stripe-session", async (req, res) => {
   try {
     const { items, email, adresseLivraison } = req.body;
@@ -87,12 +91,24 @@ app.post("/create-stripe-session", async (req, res) => {
         quantity: item.quantity,
       })),
       mode: "payment",
-      // ✅ SPA hash URLs pour éviter 404
       success_url:
         "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://wellshoppings.com/#/cancel",
       metadata: { adresseLivraison },
     });
+
+    // 🔹 Enregistrer commande en statut "pending"
+    const docRef = await db.collection("commandes").add({
+      sessionId: session.id,
+      email,
+      montant: items.reduce((sum, i) => sum + i.prix * i.quantity, 0),
+      adresse: adresseLivraison,
+      paymentMethod: "stripe",
+      status: "pending",
+      createdAt: new Date(),
+    });
+
+    console.log("✅ Commande Stripe enregistrée :", docRef.id);
 
     res.json({ url: session.url });
   } catch (error) {
@@ -106,7 +122,7 @@ if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) {
   console.error("❌ PayPal credentials manquants !");
 }
 
-const paypalEnvironment =
+const paypalEnv =
   process.env.PAYPAL_ENV === "production"
     ? new paypal.core.LiveEnvironment(
         process.env.PAYPAL_CLIENT_ID,
@@ -117,9 +133,9 @@ const paypalEnvironment =
         process.env.PAYPAL_CLIENT_SECRET
       );
 
-const paypalClient = new paypal.core.PayPalHttpClient(paypalEnvironment);
+const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
 
-// Création ordre PayPal
+// 🔹 Création ordre PayPal
 app.post("/create-paypal-order", async (req, res) => {
   try {
     const { items } = req.body;
@@ -142,10 +158,11 @@ app.post("/create-paypal-order", async (req, res) => {
   }
 });
 
-// Capture ordre PayPal
+// 🔹 Capture ordre PayPal
 app.post("/capture-paypal-order", async (req, res) => {
   try {
-    const { orderId, email, adresseLivraison } = req.body;
+    const { orderId, adresseLivraison, user } = req.body;
+    const email = user.email;
 
     const request = new paypal.orders.OrdersCaptureRequest(orderId);
     request.requestBody({});
@@ -154,14 +171,17 @@ app.post("/capture-paypal-order", async (req, res) => {
     if (capture.result.status === "COMPLETED") {
       console.log("✅ Paiement PayPal confirmé");
 
-      await db.collection("commandes").add({
+      const docRef = await db.collection("commandes").add({
         email,
         montant:
           capture.result.purchase_units[0].payments.captures[0].amount.value,
         adresse: adresseLivraison,
         paymentMethod: "paypal",
+        status: "paid",
         createdAt: new Date(),
       });
+
+      console.log("✅ Commande PayPal enregistrée :", docRef.id);
     }
 
     res.json({ success: true });
@@ -173,6 +193,4 @@ app.post("/capture-paypal-order", async (req, res) => {
 
 // ================= START =================
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () =>
-  console.log("🚀 Serveur démarré sur port", PORT)
-);
+app.listen(PORT, () => console.log("🚀 Serveur démarré sur port", PORT));
