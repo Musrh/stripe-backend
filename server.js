@@ -1,4 +1,3 @@
-// server.js
 import express from "express";
 import cors from "cors";
 import Stripe from "stripe";
@@ -51,7 +50,6 @@ app.post(
 
       if (event.type === "checkout.session.completed") {
         const session = event.data.object;
-
         console.log("✅ Paiement Stripe confirmé");
 
         await db.collection("commandes").add({
@@ -88,9 +86,8 @@ app.post("/create-stripe-session", async (req, res) => {
         quantity: item.quantity,
       })),
       mode: "payment",
-      // ✅ Mettre l'URL publique de ton front ici
-      success_url: "https://ton-frontend.com/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url: "https://ton-frontend.com/cancel",
+      success_url: "https://wellshoppings.com/success?session_id={CHECKOUT_SESSION_ID}",
+      cancel_url:  "https://wellshoppings.com/cancel",
       metadata: { adresseLivraison },
     });
 
@@ -117,18 +114,13 @@ const paypalClient = new paypal.core.PayPalHttpClient(paypalEnvironment);
 app.post("/create-paypal-order", async (req, res) => {
   try {
     const { items } = req.body;
-
     const total = items.reduce((sum, item) => sum + item.prix * item.quantity, 0).toFixed(2);
 
     const request = new paypal.orders.OrdersCreateRequest();
     request.prefer("return=representation");
     request.requestBody({
       intent: "CAPTURE",
-      purchase_units: [
-        {
-          amount: { currency_code: "EUR", value: total },
-        },
-      ],
+      purchase_units: [{ amount: { currency_code: "EUR", value: total } }],
     });
 
     const order = await paypalClient.execute(request);
