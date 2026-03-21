@@ -39,7 +39,7 @@ if (!process.env.STRIPE_SECRET_KEY) {
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// 🔹 Webhook Stripe (IMPORTANT: avant express.json)
+// Webhook Stripe (avant express.json)
 app.post(
   "/stripe-webhook",
   bodyParser.raw({ type: "application/json" }),
@@ -113,14 +113,25 @@ if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) {
   process.exit(1);
 }
 
-// ⚠️ Sandbox (test). Change en LiveEnvironment si production.
-const environment = new paypal.core.SandboxEnvironment(
-  process.env.PAYPAL_CLIENT_ID,
-  process.env.PAYPAL_CLIENT_SECRET
-);
+// Choix dynamique selon PAYPAL_ENV
+let environment;
+if (process.env.PAYPAL_ENV === "live") {
+  environment = new paypal.core.LiveEnvironment(
+    process.env.PAYPAL_CLIENT_ID,
+    process.env.PAYPAL_CLIENT_SECRET
+  );
+  console.log("⚡ PayPal en LIVE");
+} else {
+  environment = new paypal.core.SandboxEnvironment(
+    process.env.PAYPAL_CLIENT_ID,
+    process.env.PAYPAL_CLIENT_SECRET
+  );
+  console.log("⚡ PayPal en SANDBOX");
+}
 
 const paypalClient = new paypal.core.PayPalHttpClient(environment);
 
+// Créer un ordre PayPal
 app.post("/create-paypal-order", async (req, res) => {
   try {
     const { items } = req.body;
@@ -155,6 +166,7 @@ app.post("/create-paypal-order", async (req, res) => {
   }
 });
 
+// Capturer le paiement PayPal
 app.post("/capture-paypal-order", async (req, res) => {
   try {
     const { orderId, email, adresseLivraison } = req.body;
