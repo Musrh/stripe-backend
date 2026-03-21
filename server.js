@@ -88,9 +88,9 @@ app.post("/create-stripe-session", async (req, res) => {
         quantity: item.quantity,
       })),
       mode: "payment",
-      // ✅ URLs complètes
-      success_url: "https://ton-site.com/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url: "https://ton-site.com/cancel",
+      // ✅ Mettre l'URL publique de ton front ici
+      success_url: "https://ton-frontend.com/success?session_id={CHECKOUT_SESSION_ID}",
+      cancel_url: "https://ton-frontend.com/cancel",
       metadata: { adresseLivraison },
     });
 
