@@ -36,7 +36,7 @@ if (!process.env.STRIPE_SECRET_KEY) {
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// 🔹 Webhook Stripe
+// ---------------- Webhook Stripe ----------------
 app.post(
   "/stripe-webhook",
   bodyParser.raw({ type: "application/json" }),
@@ -51,20 +51,32 @@ app.post(
 
       if (event.type === "checkout.session.completed") {
         const session = event.data.object;
-        const metadata = session.metadata ? JSON.parse(session.metadata.data) : {};
+
+        // 🔹 Extraire correctement les métadonnées
+        let items = [];
+        let adresseLivraison = "";
+        try {
+          if (session.metadata && session.metadata.data) {
+            const parsed = JSON.parse(session.metadata.data);
+            items = parsed.items || [];
+            adresseLivraison = parsed.adresseLivraison || "";
+          }
+        } catch (err) {
+          console.warn("⚠️ Impossible de parser metadata:", err.message);
+        }
 
         await db.collection("commandes").add({
           email: session.customer_email,
-          items: metadata.items || [],
+          items,
           montant: session.amount_total / 100,
-          adresse: metadata.adresseLivraison || "",
+          adresse: adresseLivraison,
           paymentMethod: "stripe",
           sessionId: session.id,
           status: "paid",
           createdAt: new Date(),
         });
 
-        console.log("✅ Commande Stripe enregistrée dans Firestore");
+        console.log("✅ Commande Stripe confirmée dans Firestore");
       }
 
       res.json({ received: true });
@@ -75,7 +87,7 @@ app.post(
   }
 );
 
-// 🔹 Création session Stripe
+// ---------------- Créer session Stripe ----------------
 app.post("/create-stripe-session", async (req, res) => {
   try {
     const { items, email, adresseLivraison } = req.body;
@@ -92,7 +104,6 @@ app.post("/create-stripe-session", async (req, res) => {
         quantity: item.quantity,
       })),
       mode: "payment",
-      // ✅ URLs avec hash pour GitHub Pages SPA
       success_url:
         "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://wellshoppings.com/#/cancel",
@@ -126,7 +137,7 @@ const paypalEnvironment =
 
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnvironment);
 
-// 🔹 Création ordre PayPal
+// Créer ordre PayPal
 app.post("/create-paypal-order", async (req, res) => {
   try {
     const { items } = req.body;
@@ -149,7 +160,7 @@ app.post("/create-paypal-order", async (req, res) => {
   }
 });
 
-// 🔹 Capture ordre PayPal
+// Capture ordre PayPal
 app.post("/capture-paypal-order", async (req, res) => {
   try {
     const { orderId, email, adresseLivraison, items } = req.body;
@@ -159,8 +170,6 @@ app.post("/capture-paypal-order", async (req, res) => {
     const capture = await paypalClient.execute(request);
 
     if (capture.result.status === "COMPLETED") {
-      console.log("✅ Paiement PayPal confirmé");
-
       await db.collection("commandes").add({
         email,
         items: items || [],
@@ -171,6 +180,7 @@ app.post("/capture-paypal-order", async (req, res) => {
         status: "paid",
         createdAt: new Date(),
       });
+      console.log("✅ Commande PayPal confirmée dans Firestore");
     }
 
     res.json({ success: true });
