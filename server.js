@@ -36,12 +36,13 @@ if (!process.env.STRIPE_SECRET_KEY) {
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ---------------- Webhook Stripe ----------------
+// ---------- WEBHOOK STRIPE ----------
 app.post(
-  "/stripe-webhook",
+  "/stripe-webhook", // ⚠️ Cette URL doit correspondre à celle configurée dans Stripe
   bodyParser.raw({ type: "application/json" }),
   async (req, res) => {
     const sig = req.headers["stripe-signature"];
+
     try {
       const event = stripe.webhooks.constructEvent(
         req.body,
@@ -51,32 +52,20 @@ app.post(
 
       if (event.type === "checkout.session.completed") {
         const session = event.data.object;
-
-        // 🔹 Extraire correctement les métadonnées
-        let items = [];
-        let adresseLivraison = "";
-        try {
-          if (session.metadata && session.metadata.data) {
-            const parsed = JSON.parse(session.metadata.data);
-            items = parsed.items || [];
-            adresseLivraison = parsed.adresseLivraison || "";
-          }
-        } catch (err) {
-          console.warn("⚠️ Impossible de parser metadata:", err.message);
-        }
+        const metadata = session.metadata ? JSON.parse(session.metadata.data) : {};
 
         await db.collection("commandes").add({
           email: session.customer_email,
-          items,
+          items: metadata.items || [],
           montant: session.amount_total / 100,
-          adresse: adresseLivraison,
+          adresse: metadata.adresseLivraison || "",
           paymentMethod: "stripe",
           sessionId: session.id,
           status: "paid",
           createdAt: new Date(),
         });
 
-        console.log("✅ Commande Stripe confirmée dans Firestore");
+        console.log("✅ Commande Stripe enregistrée dans Firestore");
       }
 
       res.json({ received: true });
@@ -87,7 +76,7 @@ app.post(
   }
 );
 
-// ---------------- Créer session Stripe ----------------
+// ---------- CREATION SESSION STRIPE ----------
 app.post("/create-stripe-session", async (req, res) => {
   try {
     const { items, email, adresseLivraison } = req.body;
@@ -137,7 +126,7 @@ const paypalEnvironment =
 
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnvironment);
 
-// Créer ordre PayPal
+// ---------- CREATION ORDRE PAYPAL ----------
 app.post("/create-paypal-order", async (req, res) => {
   try {
     const { items } = req.body;
@@ -160,7 +149,7 @@ app.post("/create-paypal-order", async (req, res) => {
   }
 });
 
-// Capture ordre PayPal
+// ---------- CAPTURE ORDRE PAYPAL ----------
 app.post("/capture-paypal-order", async (req, res) => {
   try {
     const { orderId, email, adresseLivraison, items } = req.body;
@@ -170,6 +159,8 @@ app.post("/capture-paypal-order", async (req, res) => {
     const capture = await paypalClient.execute(request);
 
     if (capture.result.status === "COMPLETED") {
+      console.log("✅ Paiement PayPal confirmé");
+
       await db.collection("commandes").add({
         email,
         items: items || [],
@@ -180,7 +171,6 @@ app.post("/capture-paypal-order", async (req, res) => {
         status: "paid",
         createdAt: new Date(),
       });
-      console.log("✅ Commande PayPal confirmée dans Firestore");
     }
 
     res.json({ success: true });
@@ -190,6 +180,8 @@ app.post("/capture-paypal-order", async (req, res) => {
   }
 });
 
-// ================= START =================
+// ================= START SERVER =================
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log("🚀 Serveur démarré sur port", PORT));
+app.listen(PORT, () =>
+  console.log(`🚀 Serveur démarré sur port ${PORT} (Stripe & PayPal)`)
+);
