@@ -1,4 +1,4 @@
-// server.js bon  mars 21 2026
+// server.js
 import express from "express";
 import cors from "cors";
 import Stripe from "stripe";
@@ -27,15 +27,15 @@ const db = admin.firestore();
 console.log("✅ Firebase connecté");
 
 // ================= STRIPE =================
-if (!process.env.STRIPE_SECRET_KEY) {
-  console.error("❌ STRIPE_SECRET_KEY manquant !");
+if (!process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_WEBHOOK_SECRET) {
+  console.error("❌ Stripe keys manquantes !");
   process.exit(1);
 }
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // ---------------- Webhook Stripe ----------------
-// ⚠️ utiliser bodyParser.raw pour le webhook uniquement
+// ⚠️ bodyParser.raw pour le webhook uniquement
 app.post(
   "/webhook",
   bodyParser.raw({ type: "application/json" }),
@@ -94,7 +94,8 @@ app.post("/create-stripe-session", async (req, res) => {
         quantity: item.quantity,
       })),
       mode: "payment",
-      success_url: "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
+      success_url:
+        "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://wellshoppings.com/#/cancel",
       metadata: {
         data: JSON.stringify({ items, adresseLivraison }),
@@ -115,8 +116,14 @@ if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) {
 
 const paypalEnvironment =
   process.env.PAYPAL_ENV === "production"
-    ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET)
-    : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET);
+    ? new paypal.core.LiveEnvironment(
+        process.env.PAYPAL_CLIENT_ID,
+        process.env.PAYPAL_CLIENT_SECRET
+      )
+    : new paypal.core.SandboxEnvironment(
+        process.env.PAYPAL_CLIENT_ID,
+        process.env.PAYPAL_CLIENT_SECRET
+      );
 
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnvironment);
 
@@ -124,7 +131,9 @@ const paypalClient = new paypal.core.PayPalHttpClient(paypalEnvironment);
 app.post("/create-paypal-order", async (req, res) => {
   try {
     const { items } = req.body;
-    const total = items.reduce((sum, item) => sum + item.prix * item.quantity, 0).toFixed(2);
+    const total = items
+      .reduce((sum, item) => sum + item.prix * item.quantity, 0)
+      .toFixed(2);
 
     const request = new paypal.orders.OrdersCreateRequest();
     request.prefer("return=representation");
@@ -134,7 +143,7 @@ app.post("/create-paypal-order", async (req, res) => {
     });
 
     const order = await paypalClient.execute(request);
-    res.json({ id: order.result.id });
+    res.json({ id: order.result.id, approveUrl: order.result.links.find(l => l.rel === "approve").href });
   } catch (error) {
     console.error("❌ PayPal create order error:", error);
     res.status(500).json({ error: error.message });
@@ -145,6 +154,10 @@ app.post("/create-paypal-order", async (req, res) => {
 app.post("/capture-paypal-order", async (req, res) => {
   try {
     const { orderId, email, adresseLivraison, items } = req.body;
+
+    if (!items || items.length === 0) {
+      console.warn("⚠️ Aucun item reçu pour cette commande PayPal !");
+    }
 
     const request = new paypal.orders.OrdersCaptureRequest(orderId);
     request.requestBody({});
@@ -162,6 +175,8 @@ app.post("/capture-paypal-order", async (req, res) => {
         status: "paid",
         createdAt: new Date(),
       });
+
+      console.log("✅ Commande PayPal enregistrée dans Firestore");
     }
 
     res.json({ success: true });
