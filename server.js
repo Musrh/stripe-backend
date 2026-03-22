@@ -11,8 +11,14 @@ app.use(express.json());
 // 🔹 Config PayPal Sandbox / Live
 const paypalEnv =
   process.env.PAYPAL_ENV === "production"
-    ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET)
-    : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET);
+    ? new paypal.core.LiveEnvironment(
+        process.env.PAYPAL_CLIENT_ID,
+        process.env.PAYPAL_CLIENT_SECRET
+      )
+    : new paypal.core.SandboxEnvironment(
+        process.env.PAYPAL_CLIENT_ID,
+        process.env.PAYPAL_CLIENT_SECRET
+      );
 
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
 
@@ -20,7 +26,6 @@ const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
 app.post("/create-paypal-order", async (req, res) => {
   try {
     const { items, email, adresseLivraison } = req.body;
-
     if (!items || !items.length) return res.status(400).json({ error: "Aucun item fourni" });
 
     const total = items.reduce((sum, i) => sum + i.prix * i.quantity, 0).toFixed(2);
@@ -37,11 +42,11 @@ app.post("/create-paypal-order", async (req, res) => {
         },
       ],
       application_context: {
-        brand_name: "WellShoppings Sandbox",
+        brand_name: "WellShoppings",
         landing_page: "BILLING",
         user_action: "PAY_NOW",
-        return_url: "http://localhost:5173/#/paypal-success", // redirection après paiement
-        cancel_url: "http://localhost:5173/#/cancel",
+        return_url: process.env.PAYPAL_RETURN_URL, // dynamique
+        cancel_url: process.env.PAYPAL_CANCEL_URL, // dynamique
       },
     });
 
@@ -64,7 +69,13 @@ app.post("/capture-paypal-order", async (req, res) => {
     const capture = await paypalClient.execute(request);
 
     if (capture.result.status === "COMPLETED") {
-      console.log("✅ Paiement PayPal capturé:", email, "Montant:", capture.result.purchase_units[0].payments.captures[0].amount.value);
+      console.log(
+        "✅ Paiement PayPal capturé:",
+        email,
+        "Montant:",
+        capture.result.purchase_units[0].payments.captures[0].amount.value
+      );
+      // Ici tu peux enregistrer la commande dans Firestore ou DB
       return res.json({ success: true });
     }
 
@@ -75,4 +86,6 @@ app.post("/capture-paypal-order", async (req, res) => {
   }
 });
 
-app.listen(8080, () => console.log("🚀 PayPal Sandbox backend sur port 8080"));
+// ---------------- START SERVER ----------------
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log("🚀 PayPal backend démarré sur port", PORT));
