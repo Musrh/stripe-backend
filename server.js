@@ -1,22 +1,27 @@
-// server.js
 import express from "express";
 import cors from "cors";
-import Stripe from "stripe";
 import dotenv from "dotenv";
-import paypal from "@paypal/checkout-server-sdk";
+import Stripe from "stripe";
 import admin from "firebase-admin";
 import bodyParser from "body-parser";
+import paypal from "@paypal/checkout-server-sdk";
 
 dotenv.config();
+
 const app = express();
-app.use(cors({ origin: "*" }));
+app.use(cors());
 
-// ================= FIREBASE =================
-if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-  console.error("❌ FIREBASE_SERVICE_ACCOUNT manquant !");
-  process.exit(1);
-}
+// 🔥 IMPORTANT POUR STRIPE WEBHOOK
+app.use(
+  "/webhook",
+  bodyParser.raw({ type: "application/json" })
+);
 
+app.use(express.json());
+
+/* =====================================================
+   🔥 FIREBASE
+===================================================== */
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
 admin.initializeApp({
@@ -26,151 +31,187 @@ admin.initializeApp({
 const db = admin.firestore();
 console.log("✅ Firebase connecté");
 
-// ================= STRIPE =================
-if (!process.env.STRIPE_SECRET_KEY) {
-  console.error("❌ STRIPE_SECRET_KEY manquant !");
-  process.exit(1);
-}
-
+/* =====================================================
+   🔥 STRIPE
+===================================================== */
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ---------------- Webhook Stripe ----------------
-// ⚠️ utiliser bodyParser.raw pour le webhook uniquement
-app.post(
-  "/webhook",
-  bodyParser.raw({ type: "application/json" }),
-  async (req, res) => {
-    const sig = req.headers["stripe-signature"];
-    try {
-      const event = stripe.webhooks.constructEvent(
-        req.body,
-        sig,
-        process.env.STRIPE_WEBHOOK_SECRET
-      );
-
-      if (event.type === "checkout.session.completed") {
-        const session = event.data.object;
-        const metadata = session.metadata ? JSON.parse(session.metadata.data) : {};
-
-        await db.collection("commandes").add({
-          email: session.customer_email,
-          items: metadata.items || [],
-          montant: session.amount_total / 100,
-          adresse: metadata.adresseLivraison || "",
-          paymentMethod: "stripe",
-          sessionId: session.id,
-          status: "paid",
-          createdAt: new Date(),
-        });
-
-        console.log("✅ Commande Stripe confirmée dans Firestore");
-      }
-
-      res.json({ received: true });
-    } catch (err) {
-      console.error("❌ Webhook Stripe error:", err.message);
-      res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-  }
-);
-
-// ================= Autres routes JSON =================
-app.use(express.json()); // Pour toutes les autres routes
-
-// Création session Stripe
+// ✅ Création session Stripe
 app.post("/create-stripe-session", async (req, res) => {
   try {
     const { items, email, adresseLivraison } = req.body;
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
+      mode: "payment",
       customer_email: email,
       line_items: items.map((item) => ({
         price_data: {
           currency: "eur",
-          product_data: { name: item.nom },
-          unit_amount: Math.round(item.prix * 100),
+          product_data: {
+            name: item.nom,
+            images: item.images || [],
+          },
+          unit_amount: item.prix * 100,
         },
         quantity: item.quantity,
       })),
-      mode: "payment",
-      success_url: "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url: "https://wellshoppings.com/#/cancel",
       metadata: {
-        data: JSON.stringify({ items, adresseLivraison }),
+        data: JSON.stringify({
+          items,
+          adresseLivraison,
+        }),
       },
+      success_url:
+        "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
+      cancel_url: "https://wellshoppings.com/#/cancel",
     });
 
     res.json({ url: session.url });
   } catch (error) {
-    console.error("❌ Erreur création session Stripe :", error);
-    res.status(500).json({ error: error.message });
+    console.error("❌ Stripe session error:", error);
+    res.status(500).json({ error: "Erreur Stripe" });
   }
 });
 
-// ================= PAYPAL =================
-if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) {
-  console.error("❌ PayPal credentials manquants !");
-}
+// ✅ Webhook Stripe sécurisé
+app.post("/webhook", async (req, res) => {
+  const sig = req.headers["stripe-signature"];
 
-const paypalEnvironment =
-  process.env.PAYPAL_ENV === "production"
-    ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET)
-    : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET);
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error("❌ Webhook Stripe error:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+
+    const metadata = JSON.parse(session.metadata.data);
+
+    await db.collection("commandes").add({
+      email: session.customer_email,
+      items: metadata.items,
+      adresseLivraison: metadata.adresseLivraison,
+      montant: session.amount_total / 100,
+      paiement: "stripe",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    console.log("✅ Commande Stripe enregistrée");
+  }
+
+  res.json({ received: true });
+});
+
+/* =====================================================
+   🔥 PAYPAL CONFIG DYNAMIQUE
+===================================================== */
+
+const isLive = process.env.PAYPAL_ENV === "live";
+
+const paypalEnvironment = isLive
+  ? new paypal.core.LiveEnvironment(
+      process.env.PAYPAL_CLIENT_ID,
+      process.env.PAYPAL_SECRET
+    )
+  : new paypal.core.SandboxEnvironment(
+      process.env.PAYPAL_CLIENT_ID,
+      process.env.PAYPAL_SECRET
+    );
 
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnvironment);
 
-// Création ordre PayPal
+console.log(`💳 PayPal mode: ${isLive ? "LIVE" : "SANDBOX"}`);
+
+/* =====================================================
+   🔥 CREATE PAYPAL ORDER
+===================================================== */
+
 app.post("/create-paypal-order", async (req, res) => {
   try {
     const { items } = req.body;
-    const total = items.reduce((sum, item) => sum + item.prix * item.quantity, 0).toFixed(2);
+
+    const total = items.reduce(
+      (sum, item) => sum + item.prix * item.quantity,
+      0
+    );
 
     const request = new paypal.orders.OrdersCreateRequest();
-    request.prefer("return=representation");
     request.requestBody({
       intent: "CAPTURE",
-      purchase_units: [{ amount: { currency_code: "EUR", value: total } }],
+      purchase_units: [
+        {
+          amount: {
+            currency_code: "EUR",
+            value: total.toFixed(2),
+          },
+        },
+      ],
     });
 
     const order = await paypalClient.execute(request);
+
     res.json({ id: order.result.id });
   } catch (error) {
-    console.error("❌ PayPal create order error:", error);
-    res.status(500).json({ error: error.message });
+    console.error("❌ PayPal create error:", error);
+    res.status(500).json({ error: "Erreur PayPal create" });
   }
 });
 
-// Capture ordre PayPal
+/* =====================================================
+   🔥 CAPTURE PAYPAL ORDER
+===================================================== */
+
 app.post("/capture-paypal-order", async (req, res) => {
   try {
     const { orderId, email, adresseLivraison, items } = req.body;
 
     const request = new paypal.orders.OrdersCaptureRequest(orderId);
     request.requestBody({});
+
     const capture = await paypalClient.execute(request);
 
     if (capture.result.status === "COMPLETED") {
-      console.log("✅ Paiement PayPal confirmé");
+      const total = items.reduce(
+        (sum, item) => sum + item.prix * item.quantity,
+        0
+      );
 
       await db.collection("commandes").add({
         email,
-        items: items || [],
-        montant: capture.result.purchase_units[0].payments.captures[0].amount.value,
-        adresse: adresseLivraison,
-        paymentMethod: "paypal",
-        status: "paid",
-        createdAt: new Date(),
+        items,
+        adresseLivraison,
+        montant: total,
+        paiement: "paypal",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
-    }
 
-    res.json({ success: true });
+      console.log("✅ Commande PayPal enregistrée");
+
+      res.json({ success: true });
+    } else {
+      res.status(400).json({ success: false });
+    }
   } catch (error) {
     console.error("❌ PayPal capture error:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: "Erreur PayPal capture" });
   }
 });
 
-// ================= START =================
+/* =====================================================
+   🚀 START SERVER
+===================================================== */
+
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log("🚀 Serveur démarré sur port", PORT));
+
+app.listen(PORT, () => {
+  console.log(`🚀 Backend running on port ${PORT}`);
+});
