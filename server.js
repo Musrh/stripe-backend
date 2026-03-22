@@ -8,7 +8,7 @@ const app = express();
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 
-// ✅ Config PayPal
+// 🔹 Config PayPal Sandbox / Live
 const paypalEnv =
   process.env.PAYPAL_ENV === "production"
     ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_CLIENT_SECRET)
@@ -16,10 +16,11 @@ const paypalEnv =
 
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnv);
 
-// 🔹 Créer ordre PayPal
+// ---------------- CREATE PAYPAL ORDER ----------------
 app.post("/create-paypal-order", async (req, res) => {
   try {
-    const { items } = req.body;
+    const { items, email, adresseLivraison } = req.body;
+
     if (!items || !items.length) return res.status(400).json({ error: "Aucun item fourni" });
 
     const total = items.reduce((sum, i) => sum + i.prix * i.quantity, 0).toFixed(2);
@@ -28,11 +29,24 @@ app.post("/create-paypal-order", async (req, res) => {
     request.prefer("return=representation");
     request.requestBody({
       intent: "CAPTURE",
-      purchase_units: [{ amount: { currency_code: "EUR", value: total } }],
+      purchase_units: [
+        {
+          amount: { currency_code: "EUR", value: total },
+          description: "Commande WellShoppings",
+          custom_id: email,
+        },
+      ],
+      application_context: {
+        brand_name: "WellShoppings Sandbox",
+        landing_page: "BILLING",
+        user_action: "PAY_NOW",
+        return_url: "http://localhost:5173/#/paypal-success", // redirection après paiement
+        cancel_url: "http://localhost:5173/#/cancel",
+      },
     });
 
     const order = await paypalClient.execute(request);
-    const approveUrl = order.result.links.find(l => l.rel === "approve").href;
+    const approveUrl = order.result.links.find((l) => l.rel === "approve").href;
 
     res.json({ id: order.result.id, approveUrl });
   } catch (err) {
@@ -41,26 +55,24 @@ app.post("/create-paypal-order", async (req, res) => {
   }
 });
 
-// 🔹 Capturer ordre PayPal
+// ---------------- CAPTURE PAYPAL ORDER ----------------
 app.post("/capture-paypal-order", async (req, res) => {
   try {
-    const { orderId, email, items } = req.body;
-    if (!orderId) return res.status(400).json({ error: "orderId manquant" });
-
+    const { orderId, email, items, adresseLivraison } = req.body;
     const request = new paypal.orders.OrdersCaptureRequest(orderId);
     request.requestBody({});
     const capture = await paypalClient.execute(request);
 
     if (capture.result.status === "COMPLETED") {
-      console.log("✅ Paiement PayPal complété pour", email);
-      res.json({ success: true, capture });
-    } else {
-      res.status(400).json({ error: "Paiement non complété" });
+      console.log("✅ Paiement PayPal capturé:", email, "Montant:", capture.result.purchase_units[0].payments.captures[0].amount.value);
+      return res.json({ success: true });
     }
+
+    res.status(400).json({ error: "Paiement non complété" });
   } catch (err) {
     console.error("❌ PayPal capture error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.listen(8080, () => console.log("🚀 Backend PayPal en route sur port 8080"));
+app.listen(8080, () => console.log("🚀 PayPal Sandbox backend sur port 8080"));
