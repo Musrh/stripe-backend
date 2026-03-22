@@ -1,3 +1,4 @@
+// server.js bon  mars 21 2026
 import express from "express";
 import cors from "cors";
 import Stripe from "stripe";
@@ -15,19 +16,26 @@ if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
   console.error("❌ FIREBASE_SERVICE_ACCOUNT manquant !");
   process.exit(1);
 }
+
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
 const db = admin.firestore();
 console.log("✅ Firebase connecté");
 
 // ================= STRIPE =================
-if (!process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_WEBHOOK_SECRET) {
-  console.error("❌ Stripe keys manquantes !");
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.error("❌ STRIPE_SECRET_KEY manquant !");
   process.exit(1);
 }
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // ---------------- Webhook Stripe ----------------
+// ⚠️ utiliser bodyParser.raw pour le webhook uniquement
 app.post(
   "/webhook",
   bodyParser.raw({ type: "application/json" }),
@@ -66,10 +74,10 @@ app.post(
   }
 );
 
-// ================= JSON parser pour autres routes =================
-app.use(express.json());
+// ================= Autres routes JSON =================
+app.use(express.json()); // Pour toutes les autres routes
 
-// ---------------- Création session Stripe ----------------
+// Création session Stripe
 app.post("/create-stripe-session", async (req, res) => {
   try {
     const { items, email, adresseLivraison } = req.body;
@@ -88,20 +96,21 @@ app.post("/create-stripe-session", async (req, res) => {
       mode: "payment",
       success_url: "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://wellshoppings.com/#/cancel",
-      metadata: { data: JSON.stringify({ items, adresseLivraison }) },
+      metadata: {
+        data: JSON.stringify({ items, adresseLivraison }),
+      },
     });
 
     res.json({ url: session.url });
-  } catch (err) {
-    console.error("❌ Erreur création session Stripe :", err);
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error("❌ Erreur création session Stripe :", error);
+    res.status(500).json({ error: error.message });
   }
 });
 
 // ================= PAYPAL =================
 if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) {
   console.error("❌ PayPal credentials manquants !");
-  process.exit(1);
 }
 
 const paypalEnvironment =
@@ -111,76 +120,57 @@ const paypalEnvironment =
 
 const paypalClient = new paypal.core.PayPalHttpClient(paypalEnvironment);
 
-// ---------------- Création ordre PayPal ----------------
+// Création ordre PayPal
 app.post("/create-paypal-order", async (req, res) => {
   try {
-    const { items, email, adresseLivraison } = req.body;
-    if (!items || !items.length) return res.status(400).json({ error: "Aucun item fourni" });
-
-    const total = items.reduce((sum, i) => sum + i.prix * i.quantity, 0).toFixed(2);
+    const { items } = req.body;
+    const total = items.reduce((sum, item) => sum + item.prix * item.quantity, 0).toFixed(2);
 
     const request = new paypal.orders.OrdersCreateRequest();
     request.prefer("return=representation");
     request.requestBody({
       intent: "CAPTURE",
-      purchase_units: [
-        {
-          amount: { currency_code: "EUR", value: total },
-          description: "Commande WellShoppings",
-          custom_id: email,
-        },
-      ],
-      application_context: {
-        return_url: process.env.PAYPAL_RETURN_URL, // https://wellshoppings.com/#/paypal-success
-        cancel_url: process.env.PAYPAL_CANCEL_URL, // https://wellshoppings.com/#/cancel
-        brand_name: "WellShoppings",
-        user_action: "PAY_NOW",
-      },
+      purchase_units: [{ amount: { currency_code: "EUR", value: total } }],
     });
 
     const order = await paypalClient.execute(request);
-    const approveUrl = order.result.links.find((l) => l.rel === "approve").href;
-
-    res.json({ id: order.result.id, url: approveUrl });
-  } catch (err) {
-    console.error("❌ PayPal create order error:", err);
-    res.status(500).json({ error: err.message });
+    res.json({ id: order.result.id });
+  } catch (error) {
+    console.error("❌ PayPal create order error:", error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-// ---------------- Capture ordre PayPal ----------------
+// Capture ordre PayPal
 app.post("/capture-paypal-order", async (req, res) => {
   try {
-    const { orderId, email, items, adresseLivraison } = req.body;
-    if (!orderId) return res.status(400).json({ error: "orderId manquant" });
+    const { orderId, email, adresseLivraison, items } = req.body;
 
     const request = new paypal.orders.OrdersCaptureRequest(orderId);
     request.requestBody({});
     const capture = await paypalClient.execute(request);
 
     if (capture.result.status === "COMPLETED") {
+      console.log("✅ Paiement PayPal confirmé");
+
       await db.collection("commandes").add({
         email,
         items: items || [],
         montant: capture.result.purchase_units[0].payments.captures[0].amount.value,
-        adresse: adresseLivraison || "",
+        adresse: adresseLivraison,
         paymentMethod: "paypal",
-        orderId,
         status: "paid",
         createdAt: new Date(),
       });
-
-      console.log("✅ Commande PayPal enregistrée");
-      return res.json({ success: true });
     }
 
-    res.status(400).json({ error: "Paiement non complété" });
-  } catch (err) {
-    console.error("❌ PayPal capture error:", err);
-    res.status(500).json({ error: err.message });
+    res.json({ success: true });
+  } catch (error) {
+    console.error("❌ PayPal capture error:", error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-// ================= START SERVER =================
+// ================= START =================
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log("🚀 Serveur démarré sur port", PORT));
