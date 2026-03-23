@@ -1,4 +1,4 @@
-// ================= IMPORTS =================
+// server.js - Backend complet Stripe + Affiliation
 import express from "express";
 import cors from "cors";
 import Stripe from "stripe";
@@ -9,6 +9,7 @@ import bodyParser from "body-parser";
 dotenv.config();
 const app = express();
 app.use(cors({ origin: "*" }));
+app.use(express.json());
 
 // ================= FIREBASE =================
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
@@ -33,13 +34,12 @@ if (!process.env.STRIPE_SECRET_KEY) {
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ================= STRIPE WEBHOOK =================
+// ---------------- Webhook Stripe ----------------
 app.post(
   "/webhook",
   bodyParser.raw({ type: "application/json" }),
   async (req, res) => {
     const sig = req.headers["stripe-signature"];
-
     try {
       const event = stripe.webhooks.constructEvent(
         req.body,
@@ -49,9 +49,7 @@ app.post(
 
       if (event.type === "checkout.session.completed") {
         const session = event.data.object;
-        const metadata = session.metadata
-          ? JSON.parse(session.metadata.data)
-          : {};
+        const metadata = session.metadata ? JSON.parse(session.metadata.data) : {};
 
         await db.collection("commandes").add({
           email: session.customer_email,
@@ -64,7 +62,7 @@ app.post(
           createdAt: new Date(),
         });
 
-        console.log("✅ Commande Stripe enregistrée");
+        console.log("✅ Commande Stripe confirmée dans Firestore");
       }
 
       res.json({ received: true });
@@ -75,17 +73,10 @@ app.post(
   }
 );
 
-// ⚠️ JSON parser APRÈS webhook
-app.use(express.json());
-
-// ================= CREATE STRIPE SESSION =================
+// ================= CRÉATION SESSION STRIPE =================
 app.post("/create-stripe-session", async (req, res) => {
   try {
     const { items, email, adresseLivraison } = req.body;
-
-    if (!items || !items.length) {
-      return res.status(400).json({ error: "Panier vide" });
-    }
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
@@ -99,8 +90,7 @@ app.post("/create-stripe-session", async (req, res) => {
         quantity: item.quantity,
       })),
       mode: "payment",
-      success_url:
-        "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
+      success_url: "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://wellshoppings.com/#/cancel",
       metadata: {
         data: JSON.stringify({ items, adresseLivraison }),
@@ -108,48 +98,76 @@ app.post("/create-stripe-session", async (req, res) => {
     });
 
     res.json({ url: session.url });
-
   } catch (error) {
-    console.error("❌ Stripe session error:", error);
+    console.error("❌ Erreur création session Stripe :", error);
     res.status(500).json({ error: error.message });
   }
 });
 
+// ================= AFFILIATION =================
 
-// ================= ROUTE AFFILIATION =================
+// Ajouter un produit affilié
+app.post("/admin/affiliate-product", async (req, res) => {
+  try {
+    const { slug, affiliateUrl, title, image } = req.body;
+    if (!slug || !affiliateUrl || !title) {
+      return res.status(400).json({ error: "Champs obligatoires manquants" });
+    }
+
+    await db.collection("affiliateProducts").doc(slug).set({
+      slug,
+      affiliateUrl,
+      title,
+      image: image || "",
+      clicks: 0,
+      createdAt: new Date(),
+    });
+
+    res.json({ success: true, message: "Produit affilié ajouté !" });
+  } catch (error) {
+    console.error("❌ Erreur ajout affilié:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Redirection vers le lien affilié
 app.get("/go/:slug", async (req, res) => {
   try {
     const slug = req.params.slug;
+    const docRef = db.collection("affiliateProducts").doc(slug);
+    const snap = await docRef.get();
 
-    const snap = await db
-      .collection("affiliateProducts")
-      .where("slug", "==", slug)
-      .limit(1)
-      .get();
-
-    if (snap.empty) {
+    if (!snap.exists) {
       return res.status(404).send("Produit introuvable");
     }
 
-    const docRef = snap.docs[0];
-    const data = docRef.data();
+    const data = snap.data();
 
-    // 🔥 Compteur clic
-    await docRef.ref.update({
+    // Incrémenter le compteur de clics
+    await docRef.update({
       clicks: admin.firestore.FieldValue.increment(1),
     });
 
+    // Rediriger vers le lien affilié
     res.redirect(data.affiliateUrl);
-
   } catch (error) {
-    console.error("❌ Erreur affilié:", error);
+    console.error("❌ Erreur redirection affilié:", error);
     res.status(500).send("Erreur serveur");
   }
 });
 
+// Récupérer tous les produits affiliés
+app.get("/affiliate-products", async (req, res) => {
+  try {
+    const snap = await db.collection("affiliateProducts").get();
+    const products = snap.docs.map((doc) => doc.data());
+    res.json(products);
+  } catch (error) {
+    console.error("❌ Erreur récupération affiliés:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
-// ================= START =================
+// ================= START SERVER =================
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () =>
-  console.log("🚀 Serveur principal WellShoppings sur port", PORT)
-);
+app.listen(PORT, () => console.log("🚀 Serveur démarré sur port", PORT));
