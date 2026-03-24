@@ -1,4 +1,4 @@
-// server.js - Backend Stripe + Firestore sécurisé
+
 import express from "express";
 import cors from "cors";
 import Stripe from "stripe";
@@ -8,56 +8,42 @@ import bodyParser from "body-parser";
 
 dotenv.config();
 const app = express();
-
-// ================= CORS =================
 app.use(cors({ origin: "*" }));
 
-// ================= FIREBASE =================
-if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-  console.error("❌ FIREBASE_SERVICE_ACCOUNT manquant !");
-  process.exit(1);
-}
+// 🔹 Middleware JSON global pour toutes les routes sauf webhook
+app.use((req, res, next) => {
+  if (req.originalUrl === "/webhook") return next(); // ne pas parser pour Stripe
+  express.json()(req, res, next);
+});
 
+// ================= FIREBASE =================
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
-
 const db = admin.firestore();
-console.log("✅ Firebase connecté");
 
 // ================= STRIPE =================
-if (!process.env.STRIPE_SECRET_KEY) {
-  console.error("❌ STRIPE_SECRET_KEY manquant !");
-  process.exit(1);
-}
-
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ================= BODY PARSER =================
-// Pour toutes les routes JSON normales
-app.use(express.json());
-
 // ---------------- Webhook Stripe ----------------
-// ⚠️ utiliser bodyParser.raw pour le webhook uniquement
 app.post(
   "/webhook",
-  bodyParser.raw({ type: "application/json" }),
+  bodyParser.raw({ type: "application/json" }), // 🔹 Corps brut
   async (req, res) => {
     const sig = req.headers["stripe-signature"];
+
     try {
       const event = stripe.webhooks.constructEvent(
-        req.body,
+        req.body, // 🔹 req.body brut ici
         sig,
         process.env.STRIPE_WEBHOOK_SECRET
       );
 
       if (event.type === "checkout.session.completed") {
         const session = event.data.object;
-        const metadata = session.metadata
-          ? JSON.parse(session.metadata.data)
-          : {};
+        const metadata = session.metadata ? JSON.parse(session.metadata.data) : {};
 
         await db.collection("commandes").add({
           email: session.customer_email,
@@ -81,49 +67,31 @@ app.post(
   }
 );
 
-// ================= CRÉATION DE SESSION STRIPE =================
+// ✅ Les autres routes peuvent continuer avec express.json()
+app.use(express.json());
+
+// Exemple de route de création session Stripe
 app.post("/create-stripe-session", async (req, res) => {
-  try {
-    const { items, email, adresseLivraison } = req.body;
-
-    if (!items || !items.length) {
-      return res.status(400).json({ error: "Aucun item fourni" });
-    }
-
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      customer_email: email,
-      line_items: items.map((item) => ({
-        price_data: {
-          currency: "eur",
-          product_data: { name: item.nom },
-          unit_amount: Math.round(item.prix * 100),
-        },
-        quantity: item.quantity,
-      })),
-      mode: "payment",
-      success_url:
-        "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url: "https://wellshoppings.com/#/cancel",
-      metadata: {
-        data: JSON.stringify({ items, adresseLivraison }),
+  const { items, email, adresseLivraison } = req.body;
+  const session = await stripe.checkout.sessions.create({
+    payment_method_types: ["card"],
+    customer_email: email,
+    line_items: items.map((item) => ({
+      price_data: {
+        currency: "eur",
+        product_data: { name: item.nom },
+        unit_amount: Math.round(item.prix * 100),
       },
-    });
+      quantity: item.quantity,
+    })),
+    mode: "payment",
+    success_url: "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
+    cancel_url: "https://wellshoppings.com/#/cancel",
+    metadata: { data: JSON.stringify({ items, adresseLivraison }) },
+  });
 
-    res.json({ url: session.url });
-  } catch (error) {
-    console.error("❌ Erreur création session Stripe :", error);
-    res.status(500).json({ error: error.message });
-  }
+  res.json({ url: session.url });
 });
 
-// ================= HEALTHCHECK =================
-app.get("/", (req, res) => {
-  res.send("✅ Stripe backend en ligne !");
-});
-
-// ================= START SERVER =================
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () =>
-  console.log(`🚀 Serveur Stripe démarré sur port ${PORT}`)
-);
+app.listen(PORT, () => console.log("🚀 Serveur Stripe en ligne sur port", PORT));
