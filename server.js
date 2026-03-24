@@ -9,7 +9,12 @@ import bodyParser from "body-parser";
 dotenv.config();
 const app = express();
 app.use(cors({ origin: "*" }));
-app.use(express.json());
+
+// 🔹 Pour toutes les routes sauf webhook
+app.use((req, res, next) => {
+  if (req.originalUrl === "/webhook") return next();
+  express.json()(req, res, next);
+});
 
 // ================= FIREBASE =================
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
@@ -32,12 +37,12 @@ if (!process.env.STRIPE_SECRET_KEY) {
   process.exit(1);
 }
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2023-08-16" });
 
 // ---------------- Webhook Stripe ----------------
 app.post(
   "/webhook",
-  bodyParser.raw({ type: "application/json" }),
+  bodyParser.raw({ type: "application/json" }), // ❗ raw body obligatoire
   async (req, res) => {
     const sig = req.headers["stripe-signature"];
     try {
@@ -49,7 +54,7 @@ app.post(
 
       if (event.type === "checkout.session.completed") {
         const session = event.data.object;
-        const metadata = session.metadata ? JSON.parse(session.metadata.data) : {};
+        const metadata = session.metadata?.data ? JSON.parse(session.metadata.data) : {};
 
         await db.collection("commandes").add({
           email: session.customer_email,
@@ -90,8 +95,8 @@ app.post("/create-stripe-session", async (req, res) => {
         quantity: item.quantity,
       })),
       mode: "payment",
-      success_url: "https://wellshoppings.com/#/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url: "https://wellshoppings.com/#/cancel",
+      success_url: `${process.env.FRONTEND_URL}/#/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.FRONTEND_URL}/#/cancel`,
       metadata: {
         data: JSON.stringify({ items, adresseLivraison }),
       },
@@ -105,7 +110,6 @@ app.post("/create-stripe-session", async (req, res) => {
 });
 
 // ================= AFFILIATION =================
-
 // Ajouter un produit affilié
 app.post("/admin/affiliate-product", async (req, res) => {
   try {
@@ -137,18 +141,11 @@ app.get("/go/:slug", async (req, res) => {
     const docRef = db.collection("affiliateProducts").doc(slug);
     const snap = await docRef.get();
 
-    if (!snap.exists) {
-      return res.status(404).send("Produit introuvable");
-    }
+    if (!snap.exists) return res.status(404).send("Produit introuvable");
 
     const data = snap.data();
 
-    // Incrémenter le compteur de clics
-    await docRef.update({
-      clicks: admin.firestore.FieldValue.increment(1),
-    });
-
-    // Rediriger vers le lien affilié
+    await docRef.update({ clicks: admin.firestore.FieldValue.increment(1) });
     res.redirect(data.affiliateUrl);
   } catch (error) {
     console.error("❌ Erreur redirection affilié:", error);
